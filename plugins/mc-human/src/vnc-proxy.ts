@@ -87,6 +87,99 @@ function parseWsFrame(buf: Buffer): { frame: WsFrame; consumed: number } | null 
   return { frame: { opcode, payload, fin }, consumed: offset + maskLen + payloadLen };
 }
 
+/**
+ * Bidirectional VNC handshake interceptor for macOS compatibility.
+ *
+ * macOS VNC quirks:
+ *  1. Server sends `RFB 003.889\n` — we rewrite to `RFB 003.008\n` for the
+ *     browser so noVNC treats it as a standard server.
+ *  2. Client sends `RFB 003.008\n` back — we rewrite to `RFB 003.889\n` for
+ *     macOS so it sends the DES challenge (it ignores 003.008 responses).
+ *  3. Server advertises ARD (type 30) first — we rewrite security list to
+ *     `[2]` so noVNC uses VNC Auth (type 2) with the vault password.
+ */
+class VncHandshakeInterceptor {
+  // Server → browser direction
+  private serverBuf = Buffer.alloc(0);
+  private serverPhase: "version" | "secTypes" | "passthrough" = "version";
+
+  feedFromServer(data: Buffer): Buffer {
+    if (this.serverPhase === "passthrough") return data;
+    this.serverBuf = Buffer.concat([this.serverBuf, data]);
+    let out = Buffer.alloc(0);
+    while (true) {
+      if (this.serverPhase === "version") {
+        if (this.serverBuf.length < 12) break;
+        // Rewrite 003.889 → 003.008 so noVNC uses standard protocol
+        out = Buffer.concat([out, Buffer.from("RFB 003.008\n")]);
+        this.serverBuf = this.serverBuf.slice(12);
+        this.serverPhase = "secTypes";
+      } else if (this.serverPhase === "secTypes") {
+        if (this.serverBuf.length < 1) break;
+        const n = this.serverBuf[0];
+        if (this.serverBuf.length < 1 + n) break;
+        const offered = Array.from(this.serverBuf.slice(1, 1 + n));
+        const filtered = offered.filter((t) => t === 2);
+        const list = filtered.length > 0 ? filtered : offered;
+        out = Buffer.concat([out, Buffer.from([list.length, ...list])]);
+        this.serverBuf = this.serverBuf.slice(1 + n);
+        this.serverPhase = "passthrough";
+        if (this.serverBuf.length > 0) { out = Buffer.concat([out, this.serverBuf]); this.serverBuf = Buffer.alloc(0); }
+        break;
+      }
+    }
+    return out;
+  }
+
+  // Browser → server direction: rewrite client version 003.008 → 003.889
+  private clientBuf = Buffer.alloc(0);
+  private clientDone = false;
+
+  feedFromClient(data: Buffer): Buffer {
+    if (this.clientDone) return data;
+    this.clientBuf = Buffer.concat([this.clientBuf, data]);
+    if (this.clientBuf.length < 12) return Buffer.alloc(0);
+    const out = Buffer.concat([Buffer.from("RFB 003.889\n"), this.clientBuf.slice(12)]);
+    this.clientDone = true;
+    return out;
+  }
+}
+
+// Keep old class names as aliases so nothing else breaks
+class VncSecurityFilter {
+  private buf = Buffer.alloc(0);
+  private phase: "version" | "secTypes" | "passthrough" = "version";
+
+  feed(data: Buffer): Buffer {
+    if (this.phase === "passthrough") return data;
+
+    this.buf = Buffer.concat([this.buf, data]);
+    let out = Buffer.alloc(0);
+
+    while (true) {
+      if (this.phase === "version") {
+        if (this.buf.length < 12) break;
+        out = Buffer.concat([out, this.buf.slice(0, 12)]);
+        this.buf = this.buf.slice(12);
+        this.phase = "secTypes";
+      } else if (this.phase === "secTypes") {
+        if (this.buf.length < 1) break;
+        const n = this.buf[0];
+        if (this.buf.length < 1 + n) break;
+        const offered = Array.from(this.buf.slice(1, 1 + n));
+        const filtered = offered.filter((t) => t === 2); // keep only VNC Auth
+        const list = filtered.length > 0 ? filtered : offered; // fallback: keep all
+        out = Buffer.concat([out, Buffer.from([list.length, ...list])]);
+        this.buf = this.buf.slice(1 + n);
+        this.phase = "passthrough";
+        if (this.buf.length > 0) { out = Buffer.concat([out, this.buf]); this.buf = Buffer.alloc(0); }
+        break;
+      }
+    }
+    return out;
+  }
+}
+
 export function attachVncProxy(
   server: http.Server,
   wsPath: string,
@@ -127,12 +220,14 @@ export function attachVncProxy(
     logger.info(`mc-human: WS→VNC proxy connecting to ${vnc.host}:${vnc.port}`);
 
     const vncSock = net.createConnection({ host: vnc.host, port: vnc.port });
+    const interceptor = new VncHandshakeInterceptor();
     let wsBuffer = Buffer.alloc(0);
 
-    // VNC → WebSocket: wrap VNC bytes in WS frames
+    // VNC → WebSocket: rewrite version + filter security types
     vncSock.on("data", (chunk: Buffer) => {
       if (!socket.writable) return;
-      socket.write(frameWsMessage(chunk));
+      const out = interceptor.feedFromServer(chunk);
+      if (out.length > 0) socket.write(frameWsMessage(out));
     });
 
     vncSock.on("end", () => {
@@ -170,7 +265,7 @@ export function attachVncProxy(
           continue;
         }
         if ((frame.opcode === 2 || frame.opcode === 1) && vncSock.writable) {
-          vncSock.write(frame.payload);
+          vncSock.write(interceptor.feedFromClient(frame.payload));
         }
       }
     });

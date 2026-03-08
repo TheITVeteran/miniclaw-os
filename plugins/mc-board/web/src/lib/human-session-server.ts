@@ -84,6 +84,84 @@ function getLanIp(): string {
 
 // ── VNC WebSocket proxy (pure Node) ──────────────────────────────────────────
 
+/**
+ * Filter VNC server's security type list to only offer VNC Auth (type 2).
+ * macOS VNC advertises Apple ARD (type 30) first; noVNC picks it and fails
+ * because ARD needs macOS account credentials, not the VNC viewer password.
+ */
+class VncHandshakeInterceptor {
+  private serverBuf = Buffer.alloc(0);
+  private serverPhase: "version" | "secTypes" | "passthrough" = "version";
+  feedFromServer(data: Buffer): Buffer {
+    if (this.serverPhase === "passthrough") return data;
+    this.serverBuf = Buffer.concat([this.serverBuf, data]);
+    let out = Buffer.alloc(0);
+    while (true) {
+      if (this.serverPhase === "version") {
+        if (this.serverBuf.length < 12) break;
+        out = Buffer.concat([out, Buffer.from("RFB 003.008\n")]);
+        this.serverBuf = this.serverBuf.slice(12);
+        this.serverPhase = "secTypes";
+      } else if (this.serverPhase === "secTypes") {
+        if (this.serverBuf.length < 1) break;
+        const n = this.serverBuf[0];
+        if (this.serverBuf.length < 1 + n) break;
+        const offered = Array.from(this.serverBuf.slice(1, 1 + n));
+        const filtered = offered.filter((t) => t === 2);
+        const list = filtered.length > 0 ? filtered : offered;
+        out = Buffer.concat([out, Buffer.from([list.length, ...list])]);
+        this.serverBuf = this.serverBuf.slice(1 + n);
+        this.serverPhase = "passthrough";
+        if (this.serverBuf.length > 0) { out = Buffer.concat([out, this.serverBuf]); this.serverBuf = Buffer.alloc(0); }
+        break;
+      }
+    }
+    return out;
+  }
+  private clientBuf = Buffer.alloc(0);
+  private clientDone = false;
+  feedFromClient(data: Buffer): Buffer {
+    if (this.clientDone) return data;
+    this.clientBuf = Buffer.concat([this.clientBuf, data]);
+    if (this.clientBuf.length < 12) return Buffer.alloc(0);
+    const out = Buffer.concat([Buffer.from("RFB 003.889\n"), this.clientBuf.slice(12)]);
+    this.clientDone = true;
+    return out;
+  }
+}
+
+class VncSecurityFilter {
+  private buf = Buffer.alloc(0);
+  private phase: "version" | "secTypes" | "passthrough" = "version";
+
+  feed(data: Buffer): Buffer {
+    if (this.phase === "passthrough") return data;
+    this.buf = Buffer.concat([this.buf, data]);
+    let out = Buffer.alloc(0);
+    while (true) {
+      if (this.phase === "version") {
+        if (this.buf.length < 12) break;
+        out = Buffer.concat([out, this.buf.slice(0, 12)]);
+        this.buf = this.buf.slice(12);
+        this.phase = "secTypes";
+      } else if (this.phase === "secTypes") {
+        if (this.buf.length < 1) break;
+        const n = this.buf[0];
+        if (this.buf.length < 1 + n) break;
+        const offered = Array.from(this.buf.slice(1, 1 + n));
+        const filtered = offered.filter((t) => t === 2);
+        const list = filtered.length > 0 ? filtered : offered;
+        out = Buffer.concat([out, Buffer.from([list.length, ...list])]);
+        this.buf = this.buf.slice(1 + n);
+        this.phase = "passthrough";
+        if (this.buf.length > 0) { out = Buffer.concat([out, this.buf]); this.buf = Buffer.alloc(0); }
+        break;
+      }
+    }
+    return out;
+  }
+}
+
 function wsAccept(key: string): string {
   return crypto.createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
 }
@@ -172,9 +250,14 @@ function handleUpgrade(req: http.IncomingMessage, socket: net.Socket, _head: Buf
   );
 
   const vnc = net.createConnection({ host: VNC_HOST, port: VNC_PORT });
+  const interceptor = new VncHandshakeInterceptor();
   let wsBuf = Buffer.alloc(0);
 
-  vnc.on("data", (chunk: Buffer) => { if (socket.writable) socket.write(frameWs(chunk)); });
+  vnc.on("data", (chunk: Buffer) => {
+    if (!socket.writable) return;
+    const out = interceptor.feedFromServer(chunk);
+    if (out.length > 0) socket.write(frameWs(out));
+  });
   vnc.on("end", () => { if (socket.writable) { socket.write(Buffer.from([0x88, 0x00])); socket.end(); } });
   vnc.on("error", () => { if (socket.writable) socket.destroy(); });
 
@@ -186,7 +269,7 @@ function handleUpgrade(req: http.IncomingMessage, socket: net.Socket, _head: Buf
       wsBuf = wsBuf.slice(f.consumed);
       if (f.opcode === 8) { vnc.end(); socket.end(); return; }
       if (f.opcode === 9) { socket.write(Buffer.from([0x8a, 0x00])); continue; }
-      if ((f.opcode === 2 || f.opcode === 1) && vnc.writable) vnc.write(f.payload);
+      if ((f.opcode === 2 || f.opcode === 1) && vnc.writable) vnc.write(interceptor.feedFromClient(f.payload));
     }
   });
 

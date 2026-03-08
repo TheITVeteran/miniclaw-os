@@ -23,6 +23,7 @@ interface Props {
   onCardClick: (id: string) => void;
   onWatchClick?: (id: string) => void;
   onFocusToggle?: (cardId: string, focused: boolean) => void;
+  onHoldToggle?: (cardId: string, held: boolean) => void;
   onInjectContext?: (ctx: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -73,7 +74,7 @@ function TriageColumnHeader({ column, topCards, onOpenTriage, onOpenWork }: Tria
   );
 }
 
-export function Column({ column, cards, globalShippedIds, projects, activeIds, activeWorkers, onCardClick, onWatchClick, onFocusToggle, onInjectContext, collapsed, onToggleCollapse }: Props) {
+export function Column({ column, cards, globalShippedIds, projects, activeIds, activeWorkers, onCardClick, onWatchClick, onFocusToggle, onHoldToggle, onInjectContext, collapsed, onToggleCollapse }: Props) {
   const [showTriage, setShowTriage] = useState(false);
   const [showWork, setShowWork] = useState(false);
   const [workModalCards, setWorkModalCards] = useState<BoardCard[]>([]);
@@ -94,6 +95,9 @@ export function Column({ column, cards, globalShippedIds, projects, activeIds, a
     () => cards
       .filter(c => c.column === column)
       .sort((a, b) => {
+        const aH = a.tags?.includes("hold") ? 1 : 0;
+        const bH = b.tags?.includes("hold") ? 1 : 0;
+        if (aH !== bH) return aH - bH;
         const aFocused = a.tags?.includes("focus") ? 0 : 1;
         const bFocused = b.tags?.includes("focus") ? 0 : 1;
         return aFocused - bFocused;
@@ -130,6 +134,7 @@ export function Column({ column, cards, globalShippedIds, projects, activeIds, a
                 onClick={onCardClick}
                 onWatchClick={onWatchClick}
                 onFocusToggle={onFocusToggle}
+                onHoldToggle={onHoldToggle}
                 onInjectContext={onInjectContext}
               />
             ))

@@ -187,6 +187,32 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
     }).then(() => mutate()).catch(() => mutate());
   }, [mutate]);
 
+  const handleHoldToggle = useCallback((cardId: string, setHeld: boolean) => {
+    mutate(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        cards: current.cards.map(c => {
+          if (c.id !== cardId) return c;
+          const newTags = setHeld
+            ? [...c.tags.filter(t => t !== "hold"), "hold"]
+            : c.tags.filter(t => t !== "hold");
+          return { ...c, tags: newTags };
+        }),
+      };
+    }, { revalidate: false });
+
+    const updateBody = setHeld
+      ? { action: "update", cardId, "add-tags": "hold" }
+      : { action: "update", cardId, "remove-tags": "hold" };
+
+    fetch("/api/board/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updateBody),
+    }).then(() => mutate()).catch(() => mutate());
+  }, [mutate]);
+
   const handleSearchSelect = (cardId: string) => {
     setSearchQuery("");
     setSearchOpen(false);
@@ -267,6 +293,7 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
             onCardClick={openCard}
             onWatchClick={setWatchCardId}
             onFocusToggle={handleFocusToggle}
+            onHoldToggle={handleHoldToggle}
             onInjectContext={onInjectContext}
             collapsed={col === "shipped" ? !shippedOpen : undefined}
             onToggleCollapse={col === "shipped" ? () => setShippedOpen(o => !o) : undefined}

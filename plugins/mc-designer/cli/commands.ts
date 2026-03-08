@@ -142,6 +142,83 @@ export function registerDesignerCommands(ctx: Ctx): void {
       await displayImage(imagePath);
     });
 
+  // ---- designer gen-refs ----
+  designer
+    .command("gen-refs <prompt>")
+    .description("Generate an image using reference photos + a text prompt")
+    .requiredOption("-r, --ref <file>", "Reference image path (use multiple -r flags)", (v: string, acc: string[]) => { acc.push(v); return acc; }, [] as string[])
+    .option("-c, --canvas <name>", "Target canvas (created if absent)", "default")
+    .option("-l, --layer <name>", "Layer name")
+    .option("-W, --width <px>", "Canvas width when auto-creating", String(cfg.defaultWidth))
+    .option("-H, --height <px>", "Canvas height when auto-creating", String(cfg.defaultHeight))
+    .option("--role <role>", "Layer role: background or element", "background")
+    .action(async (prompt: string, opts: {
+      ref: string[]; canvas: string; layer?: string; width: string; height: string; role?: string;
+    }) => {
+      if (!opts.ref || opts.ref.length === 0) {
+        console.error("At least one --ref <file> is required");
+        process.exit(1);
+      }
+      for (const r of opts.ref) {
+        if (!require("node:fs").existsSync(r)) {
+          console.error(`Reference file not found: ${r}`);
+          process.exit(1);
+        }
+      }
+
+      const canvasName = opts.canvas;
+      let canvas = store.loadCanvas(canvasName);
+      if (!canvas) {
+        canvas = store.createCanvas(canvasName, parseInt(opts.width, 10), parseInt(opts.height, 10));
+        console.log(`Created canvas "${canvasName}" (${canvas.width}×${canvas.height})`);
+      }
+
+      if (!cfg.apiKey) {
+        const newKey = await promptAndVaultKey(cfg.vaultBin);
+        if (!newKey) process.exit(1);
+        gemini.setApiKey(newKey);
+      }
+
+      const role = (opts.role === "background" || opts.role === "element") ? opts.role : "background";
+      const aspectRatio = pickAspectRatio(canvas.width, canvas.height);
+      const stylePrefix = canvas.style ? `${canvas.style}. ` : "";
+      const engineeredPrompt = `${stylePrefix}${prompt}. Full bleed, fills entire frame edge to edge, no borders or whitespace.`;
+
+      console.log(`Generating from ${opts.ref.length} reference image(s): "${prompt}" (${canvas.width}×${canvas.height}, ar=${aspectRatio}) ...`);
+      const t0 = Date.now();
+
+      let result;
+      try {
+        result = await gemini.genFromRefs(opts.ref, engineeredPrompt, canvas.seed, aspectRatio);
+      } catch (err) {
+        console.error(`Generation failed: ${err}`);
+        process.exit(1);
+      }
+
+      const layerId = `layer-${Date.now()}`;
+      const layerName = opts.layer ?? `layer-${canvas.layers.length + 1}`;
+
+      if (store.findLayer(canvas, layerName)) {
+        console.error(`Layer "${layerName}" already exists. Use --layer <name> to specify a unique name.`);
+        process.exit(1);
+      }
+
+      const imagePath = store.saveLayerImage(canvasName, layerId, result!.buffer);
+      const { Layer } = await import("../src/types.js") as any;
+      const layer = {
+        id: layerId, name: layerName, z: store.nextZ(canvas), imagePath,
+        opacity: 100, visible: true, x: 0, y: 0, blendMode: "normal", role,
+        prompt, createdAt: new Date().toISOString(),
+      };
+      store.addLayer(canvas, layer);
+      store.recordUsage({ ts: new Date().toISOString(), ...result.usage, canvasName, layerName });
+
+      console.log(`Layer "${layerName}" added to canvas "${canvasName}"`);
+      console.log(`Image saved: ${imagePath}`);
+      console.log(`Tokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out  |  ${Date.now() - t0}ms`);
+      await displayImage(imagePath);
+    });
+
   // ---- designer edit ----
   designer
     .command("edit <canvas> <layer> <instructions>")

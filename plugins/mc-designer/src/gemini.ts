@@ -127,6 +127,64 @@ export class GeminiClient {
     return text;
   }
 
+  /** Generate an image using multiple reference images + a prompt. */
+  async genFromRefs(imagePaths: string[], prompt: string, seed?: number, aspectRatio?: string): Promise<GenerateResult> {
+    const t0 = Date.now();
+
+    const imageParts = imagePaths.map((p) => {
+      const buf = fs.readFileSync(p);
+      const ext = path.extname(p).toLowerCase();
+      const mime = (ext === ".jpg" || ext === ".jpeg") ? "image/jpeg" : "image/png";
+      return { inlineData: { mimeType: mime, data: buf.toString("base64") } };
+    });
+
+    const genConfig: Record<string, unknown> = {};
+    if (seed !== undefined) genConfig.seed = seed;
+    if (aspectRatio) genConfig.imageConfig = { aspectRatio };
+
+    const body: Record<string, unknown> = {
+      contents: [{
+        role: "user",
+        parts: [{ text: prompt }, ...imageParts],
+      }],
+      ...(Object.keys(genConfig).length > 0 ? { generationConfig: genConfig } : {}),
+    };
+
+    const response = geminiRequest(this.apiKey, this.model, body) as any;
+    const durationMs = Date.now() - t0;
+    const candidate = response.candidates?.[0];
+    const usageMeta = response.usageMetadata;
+
+    let imageData: string | null = null;
+    let mimeType = "image/png";
+    let imageCount = 0;
+
+    for (const part of candidate?.content?.parts ?? []) {
+      if (part.inlineData?.data) {
+        imageData = part.inlineData.data;
+        mimeType = part.inlineData.mimeType ?? "image/png";
+        imageCount++;
+        break;
+      }
+    }
+
+    if (!imageData) throw new Error("Gemini returned no image data");
+
+    return {
+      buffer: Buffer.from(imageData, "base64"),
+      mimeType,
+      usage: {
+        op: "generate",
+        model: this.model,
+        prompt,
+        inputTokens: usageMeta?.promptTokenCount ?? 0,
+        outputTokens: usageMeta?.candidatesTokenCount ?? 0,
+        imageCount,
+        durationMs,
+      },
+    };
+  }
+
   async edit(imagePath: string, instructions: string, seed?: number): Promise<GenerateResult> {
     const imageBuffer = fs.readFileSync(imagePath);
     const base64 = imageBuffer.toString("base64");

@@ -90,7 +90,7 @@ export async function startSession(opts: SessionOptions): Promise<SessionResult>
   const wsPath = "/websockify";
 
   const novncRoot = path.resolve(
-    new URL("../../node_modules/@novnc/novnc/lib", import.meta.url).pathname
+    new URL("../node_modules/@novnc/novnc/lib", import.meta.url).pathname
   );
 
   let resolveClose!: () => void;
