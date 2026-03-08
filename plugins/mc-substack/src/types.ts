@@ -1,3 +1,9 @@
+export interface PostSchedule {
+  id: number;
+  trigger_at: string;
+  type: string;
+}
+
 export interface SubstackDraft {
   id: number;
   draft_title: string;
@@ -5,6 +11,7 @@ export interface SubstackDraft {
   draft_body: string; // Tiptap JSON string
   is_published: boolean;
   post_date: string | null;
+  postSchedules?: PostSchedule[];
   slug: string;
   type: string;
 }

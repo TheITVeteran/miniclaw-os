@@ -108,6 +108,12 @@ export function registerSubstackCommands(ctx: Ctx): void {
       console.log(`Body len: ${draft.draft_body?.length ?? 0} chars`);
       console.log(`Published: ${draft.is_published}`);
       console.log(`Post date: ${draft.post_date}`);
+      const schedules = draft.postSchedules ?? [];
+      if (schedules.length > 0) {
+        console.log(`Scheduled: ${schedules.map(s => s.trigger_at).join(", ")}`);
+      } else {
+        console.log(`Scheduled: none`);
+      }
     });
 
   // ---- upload-image ----
