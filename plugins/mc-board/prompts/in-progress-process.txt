@@ -72,9 +72,12 @@ openclaw mc-board update {{CARD_ID}} --notes "work_dir: <work_dir> | branch: {{C
 4. Check off each criterion as YOU complete it (change `- [ ]` to `- [x]`).
 5. Update the card when done:
      openclaw mc-board update {{CARD_ID}} --notes '<date>: <what was done>' --criteria '<updated checklist>'
-6. If ALL criteria are checked:
+6. Commit all work to the GB branch before moving to in-review:
+     but -C <work_dir> commit -m "feat({{CARD_ID}}): <summary of work done>" -a
+   (If `but commit` fails, fall back to: git -C <work_dir> add -A && git -C <work_dir> commit -m "feat({{CARD_ID}}): <summary>")
+7. If ALL criteria are checked:
      openclaw mc-board move {{CARD_ID}} in-review
-7. Release the card when done:
+8. Release the card when done:
      openclaw mc-board release {{CARD_ID}} --worker board-worker-in-progress
 
 Silent exit when finished. No summary messages.
