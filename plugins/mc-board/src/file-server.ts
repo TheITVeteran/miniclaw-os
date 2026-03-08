@@ -158,13 +158,13 @@ export class FileServer {
 
 /**
  * Extract file paths from text using common patterns.
- * Detects /Users/... and ~/... paths.
+ * Detects absolute home paths and ~/... paths.
  */
 export function extractFilePaths(text: string): string[] {
   const homeEscaped = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const patterns = [
     /~\/[^\s\)\]\}\|`]*/g, // ~/path/to/file
-    new RegExp(`${homeEscaped}/[^\\s\\)\\]\\}\\|\`]*`, "g"), // /home/user/... or /Users/user/...
+    new RegExp(`${homeEscaped}/[^\\s\\)\\]\\}\\|\`]*`, "g"), // absolute home-dir paths
   ];
 
   const paths: string[] = [];
