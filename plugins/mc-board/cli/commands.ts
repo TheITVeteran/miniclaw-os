@@ -1184,6 +1184,7 @@ RULES:
 8. implementation_plan: HOW to implement it (numbered steps)
 9. acceptance_criteria: What "done" looks like (markdown checkboxes: - [ ] ...)
 10. depends_on: list of keys from other sub-tasks that must be completed first (empty array [] if none)
+11. verify_url: The URL where the work can be verified live. REQUIRED for web/API/frontend/backend tasks. Use the specific page or endpoint (e.g. "http://localhost:3001/orders", not just "/"). For CLI tools use "cli:<command>" (e.g. "cli:npm run shop -- list"). Leave empty only for pure research or documentation cards.
 
 PLANNING DOCUMENT:
 ${docContent}
@@ -1208,7 +1209,8 @@ Output the decomposition as JSON under exactly this header (no markdown fences):
       "acceptance_criteria": "- [ ] ...",
       "priority": "medium",
       "tags": ["feature"],
-      "depends_on": []
+      "depends_on": [],
+      "verify_url": "http://localhost:3001/path"
     },
     {
       "key": "T2",
@@ -1218,7 +1220,8 @@ Output the decomposition as JSON under exactly this header (no markdown fences):
       "acceptance_criteria": "- [ ] ...",
       "priority": "medium",
       "tags": ["feature"],
-      "depends_on": ["T1"]
+      "depends_on": ["T1"],
+      "verify_url": "http://localhost:3001/path"
     }
   ]
 }
@@ -1332,6 +1335,7 @@ Be thorough. Extract all meaningful tasks from the document. If the document alr
           priority?: string;
           tags?: string[];
           depends_on?: string[];
+          verify_url?: string;
         }
 
         interface EpicSpec {
@@ -1341,6 +1345,7 @@ Be thorough. Extract all meaningful tasks from the document. If the document alr
           acceptance_criteria?: string;
           priority?: string;
           tags?: string[];
+          verify_url?: string;
         }
 
         interface PlanResult {
@@ -1440,6 +1445,7 @@ Be thorough. Extract all meaningful tasks from the document. If the document alr
             problem_description: task.problem_description ?? "",
             implementation_plan: task.implementation_plan ?? "",
             acceptance_criteria: task.acceptance_criteria ?? "",
+            verify_url: task.verify_url,
           });
           keyToId.set(task.key, card.id);
           const depStr = dependsOnIds.length > 0 ? ` (depends on: ${task.depends_on?.join(", ")})` : "";

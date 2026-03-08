@@ -71,6 +71,39 @@ export async function compositeCanvas(canvas: Canvas): Promise<Buffer> {
 }
 
 /**
+ * Chroma-key: replace all pixels within `tolerance` (Euclidean RGB distance)
+ * of `targetHex` with full transparency. Designed for Gemini-generated images
+ * with a 50% grey (#808080) background since Gemini can't output transparency.
+ */
+export async function chromaKey(
+  inputPath: string,
+  targetHex: string = "#808080",
+  tolerance: number = 30,
+): Promise<Buffer> {
+  const target = hexToRgb(targetHex);
+  const { data, info } = await sharp(inputPath)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const pixels = new Uint8Array(data.buffer);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const dr = pixels[i]     - target.r;
+    const dg = pixels[i + 1] - target.g;
+    const db = pixels[i + 2] - target.b;
+    if (Math.sqrt(dr * dr + dg * dg + db * db) <= tolerance) {
+      pixels[i + 3] = 0;
+    }
+  }
+
+  return sharp(Buffer.from(pixels), {
+    raw: { width: info.width, height: info.height, channels: 4 },
+  })
+    .png()
+    .toBuffer();
+}
+
+/**
  * Strip the background from an image using a simple edge-alpha approach.
  * For proper background removal, this should be replaced with an API call.
  * Returns a PNG buffer with transparency.

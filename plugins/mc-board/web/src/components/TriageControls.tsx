@@ -6,16 +6,19 @@ interface Props extends TriageColumnState {
   onOpenTriage: () => void;
   onOpenWork?: () => void;
   hasWorkCards?: boolean;
+  hasTriageCards?: boolean;
   launching?: boolean;
   maxConcurrent: number;
   onMaxConcurrentChange: (n: number) => void;
+  showTriageButton?: boolean;
 }
 
 export function TriageControls({
   cronEnabled, cronMinutes, cronLoaded,
   handleToggleCron, handleMinutesChange,
-  onOpenTriage, onOpenWork, hasWorkCards, launching,
+  onOpenTriage, onOpenWork, hasWorkCards, hasTriageCards, launching,
   maxConcurrent, onMaxConcurrentChange,
+  showTriageButton = true,
 }: Props) {
   if (!cronLoaded) return null;
 
@@ -74,29 +77,31 @@ export function TriageControls({
         ))}
       </select>
 
-      <button
-        onClick={e => { e.stopPropagation(); onOpenTriage(); }}
-        style={{
-          fontSize: 10, padding: "3px 9px", borderRadius: 4,
-          background: "#27272a", border: "1px solid #52525b",
-          color: "#a1a1aa", cursor: "pointer", lineHeight: 1.6,
-        }}
-      >
-        ⚙ Triage
-      </button>
+      {showTriageButton && (
+        <button
+          onClick={e => { e.stopPropagation(); if (hasTriageCards) onOpenTriage(); }}
+          disabled={!hasTriageCards}
+          title={hasTriageCards ? "Triage backlog cards" : "No cards to triage"}
+          className="btn-action"
+          style={{ fontSize: 10, padding: "3px 9px", borderRadius: 4 }}
+        >
+          ⚙ Triage
+        </button>
+      )}
 
       {onOpenWork && (
         <button
           onClick={e => { e.stopPropagation(); if (hasWorkCards) onOpenWork(); }}
           disabled={launching || !hasWorkCards}
           title={hasWorkCards ? `Work top ${maxConcurrent} card${maxConcurrent === 1 ? "" : "s"}` : "No cards to work"}
+          className="btn-action"
           style={{
             fontSize: 10, padding: "3px 9px", borderRadius: 4,
-            background: launching ? "#292524" : "#27272a",
-            border: `1px solid ${launching ? "#92400e" : hasWorkCards ? "#78350f" : "#3f3f46"}`,
-            color: launching ? "#92400e" : hasWorkCards ? "#f59e0b" : "#3f3f46",
-            cursor: (launching || !hasWorkCards) ? "not-allowed" : "pointer",
-            lineHeight: 1.6, opacity: hasWorkCards ? 1 : 0.5,
+            ...(launching ? {
+              background: "#292524",
+              border: "1px solid #92400e",
+              color: "#92400e",
+            } : {}),
           }}
         >
           {launching ? "…" : "▶ Work"}

@@ -52,7 +52,7 @@ export function BacklogSchedulerModal({ onClose }: Props) {
       const res = await fetch("/api/backlog-prompt/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, debug: showDebug }),
       });
       setTestLog(prev => prev + `[${ts()}] server responded (headers)\n`);
       if (!res.body) {

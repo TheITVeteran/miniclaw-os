@@ -19,6 +19,7 @@ export interface Card {
   project_id?: string;    // optional — links card to a Project (prj_<hex>)
   work_type?: 'work' | 'verify';  // optional — designates work vs verification card
   linked_card_id?: string;        // optional — for verify cards, links to source work card
+  depends_on?: string[];          // optional — list of card IDs this card depends on (blocked by)
   created_at: string;
   updated_at: string;
   history: HistoryEntry[];
@@ -242,6 +243,9 @@ export function parseCard(content: string): Card {
     ? (fm.work_type as 'work' | 'verify')
     : undefined;
   const linked_card_id = fm.linked_card_id ? String(fm.linked_card_id) : undefined;
+  const depends_on = Array.isArray(fm.depends_on)
+    ? (fm.depends_on as string[])
+    : (fm.depends_on ? String(fm.depends_on).split(",").map(s => s.trim()).filter(Boolean) : undefined);
 
   return {
     id: String(fm.id ?? ""),
@@ -252,6 +256,7 @@ export function parseCard(content: string): Card {
     ...(project_id ? { project_id } : {}),
     ...(work_type ? { work_type } : {}),
     ...(linked_card_id ? { linked_card_id } : {}),
+    ...(depends_on && depends_on.length > 0 ? { depends_on } : {}),
     created_at: String(fm.created_at ?? new Date().toISOString()),
     updated_at: String(fm.updated_at ?? new Date().toISOString()),
     history,
@@ -272,6 +277,9 @@ export function serializeCard(card: Card): string {
   const projectLine = card.project_id ? `project_id: ${card.project_id}\n` : "";
   const workTypeLine = card.work_type ? `work_type: ${card.work_type}\n` : "";
   const linkedCardLine = card.linked_card_id ? `linked_card_id: ${card.linked_card_id}\n` : "";
+  const dependsOnLine = card.depends_on && card.depends_on.length > 0
+    ? `depends_on: [${card.depends_on.join(", ")}]\n`
+    : "";
 
   const frontmatter =
     `---\n` +
@@ -283,6 +291,7 @@ export function serializeCard(card: Card): string {
     projectLine +
     workTypeLine +
     linkedCardLine +
+    dependsOnLine +
     `created_at: ${card.created_at}\n` +
     `updated_at: ${card.updated_at}\n` +
     `history:\n` +

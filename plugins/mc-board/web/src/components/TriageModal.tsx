@@ -60,7 +60,7 @@ export function TriageModal({ column, onClose }: Props) {
       const res = await fetch(`/api/triage-prompt/${column}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, debug: showDebug }),
       });
       setTestLog(prev => prev + `[${ts()}] server responded (headers)\n`);
       if (!res.body) { setTestLog(prev => prev + "No response body."); return; }
@@ -152,12 +152,8 @@ export function TriageModal({ column, onClose }: Props) {
         <button
           onClick={handleTest}
           disabled={testing || loading}
-          style={{
-            fontSize: 12, padding: "6px 16px", borderRadius: 6,
-            background: "#18181b", border: "1px solid #3f3f46",
-            color: testing ? "#52525b" : "#a1a1aa",
-            cursor: testing ? "not-allowed" : "pointer",
-          }}
+          className="btn-action"
+          style={{ fontSize: 12, padding: "6px 16px", borderRadius: 6 }}
         >
           {testing ? "Running..." : "▶ Run triage"}
         </button>

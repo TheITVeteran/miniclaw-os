@@ -10,7 +10,7 @@
 import Database from "better-sqlite3";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import type { Card, Column, Priority, Project, ActiveEntry, HistoryEntry, LogEntry, WorkLogEntry } from "./types";
+import type { Card, BoardCard, Column, Priority, Project, ActiveEntry, HistoryEntry, LogEntry, WorkLogEntry, PickupLogEntry, CardTimeline, TimelineEvent, AgentRun } from "./types";
 
 // ---- DB path resolution ----
 
@@ -30,7 +30,9 @@ function getDb(): Database.Database | null {
   const dbPath = resolveDbPath();
   if (!fs.existsSync(dbPath)) return null;
   try {
-    _db = new Database(dbPath, { readonly: true });
+    _db = new Database(dbPath);
+    // Enable WAL auto-checkpoint so the WAL file doesn't grow unbounded and slow reads
+    _db.pragma("wal_autocheckpoint = 100");
     return _db;
   } catch {
     return null;
@@ -58,6 +60,8 @@ interface CardRow {
   research: string;
   verify_url: string;
   work_log: string;
+  depends_on: string;
+  attachments: string;
 }
 
 interface HistoryRow {
@@ -93,6 +97,21 @@ interface LogRow {
   at: string;
 }
 
+interface AgentRunRow {
+  id: string;
+  card_id: string;
+  column: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  exit_code: number | null;
+  peak_tokens: number | null;
+  tool_call_count: number;
+  tool_calls: string;
+  log_file: string;
+  debug_log_file: string;
+}
+
 // ---- Card helpers ----
 
 function rowToCard(row: CardRow, history: HistoryRow[]): Card {
@@ -115,6 +134,8 @@ function rowToCard(row: CardRow, history: HistoryRow[]): Card {
     review_notes: row.review_notes,
     research: row.research,
     verify_url: row.verify_url ?? "",
+    depends_on: (() => { try { return JSON.parse(row.depends_on || "[]") as string[]; } catch { return []; } })(),
+    attachments: (() => { try { return JSON.parse(row.attachments || "[]") as import("./types").Attachment[]; } catch { return []; } })(),
     work_log: (() => {
       try {
         const raw = JSON.parse(row.work_log || "[]") as Array<Record<string, unknown>>;
@@ -159,6 +180,55 @@ export function listCards(projectId?: string): Card[] {
   } catch { return []; }
 }
 
+// ---- Slim board listing (optimized — no heavy text fields) ----
+
+function criteriaCountsFromText(text: string): { checked: number; total: number } {
+  const lines = text.replace(/\\n/g, "\n").split("\n").filter(l => /^\s*-\s*\[/.test(l));
+  return { total: lines.length, checked: lines.filter(l => /^\s*-\s*\[x\]/i.test(l)).length };
+}
+
+interface SlimRow {
+  id: string; title: string; col: string; priority: string; tags: string;
+  project_id: string | null; work_type: string | null; linked_card_id: string | null;
+  created_at: string; updated_at: string; depends_on: string; acceptance_criteria: string;
+}
+
+export function listBoardCards(projectId?: string): BoardCard[] {
+  const db = getDb();
+  if (!db) return [];
+  try {
+    const rows = projectId
+      ? db.prepare(`SELECT id, title, col, priority, tags, project_id, work_type, linked_card_id, created_at, updated_at, depends_on, acceptance_criteria FROM cards WHERE project_id = ?`).all(projectId) as SlimRow[]
+      : db.prepare(`SELECT id, title, col, priority, tags, project_id, work_type, linked_card_id, created_at, updated_at, depends_on, acceptance_criteria FROM cards`).all() as SlimRow[];
+    return rows.map(r => {
+      const { checked, total } = criteriaCountsFromText(r.acceptance_criteria);
+      return {
+        id: r.id,
+        title: r.title,
+        column: r.col as Column,
+        priority: r.priority as Priority,
+        tags: (() => { try { return JSON.parse(r.tags) as string[]; } catch { return []; } })(),
+        project_id: r.project_id ?? undefined,
+        work_type: r.work_type ? (r.work_type as "work" | "verify") : undefined,
+        linked_card_id: r.linked_card_id ?? undefined,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        depends_on: (() => { try { return JSON.parse(r.depends_on || "[]") as string[]; } catch { return []; } })(),
+        criteria_checked: checked,
+        criteria_total: total,
+      };
+    });
+  } catch { return []; }
+}
+
+export function getShippedIds(): string[] {
+  const db = getDb();
+  if (!db) return [];
+  try {
+    return (db.prepare(`SELECT id FROM cards WHERE col = 'shipped'`).all() as { id: string }[]).map(r => r.id);
+  } catch { return []; }
+}
+
 export function getCard(id: string): Card | null {
   const db = getDb();
   if (!db) return null;
@@ -193,6 +263,87 @@ export function getProject(id: string): Project | null {
     if (!row) return null;
     return { id: row.id, name: row.name, description: row.description, work_dir: row.work_dir || undefined, github_repo: row.github_repo || undefined };
   } catch { return null; }
+}
+
+export function getCardTimeline(id: string): CardTimeline {
+  const db = getDb();
+  if (!db) return { events: [] };
+  try {
+    const card = db.prepare(`SELECT * FROM cards WHERE id = ?`).get(id) as CardRow | undefined;
+    if (!card) return { events: [] };
+
+    const historyRows = db.prepare(
+      `SELECT card_id, col, moved_at FROM card_history WHERE card_id = ? ORDER BY id ASC`,
+    ).all(id) as HistoryRow[];
+
+    const pickupRows = db.prepare(
+      `SELECT card_id, worker, col, action, at FROM pickup_log WHERE card_id = ? AND action IN ('pickup', 'release') ORDER BY id ASC`,
+    ).all(id) as { card_id: string; worker: string; col: string; action: string; at: string }[];
+
+    const workLog: WorkLogEntry[] = (() => {
+      try {
+        const raw = JSON.parse(card.work_log || "[]") as Array<Record<string, unknown>>;
+        return raw.map(e => ({
+          at: (e.at ?? e.ts ?? "") as string,
+          worker: (e.worker ?? "") as string,
+          note: (e.note ?? e.entry ?? "") as string,
+          ...(e.links ? { links: e.links as string[] } : {}),
+        }));
+      } catch { return []; }
+    })();
+
+    // Query agent_runs table (primary source for agent run events)
+    let agentRunRows: AgentRunRow[] = [];
+    try {
+      agentRunRows = db.prepare(
+        `SELECT id, card_id, column, started_at, ended_at, duration_ms, exit_code, peak_tokens, tool_call_count, tool_calls, log_file, debug_log_file
+         FROM agent_runs WHERE card_id = ? ORDER BY started_at ASC`,
+      ).all(id) as AgentRunRow[];
+    } catch { /* table may not exist yet on older DBs */ }
+
+    const events: TimelineEvent[] = [
+      ...historyRows.map(h => ({ kind: "column" as const, column: h.col as Column, at: h.moved_at })),
+      ...pickupRows.map(p => ({ kind: "pickup" as const, worker: p.worker, action: p.action as "pickup" | "release", col: p.col, at: p.at })),
+      ...workLog.map(w => ({ kind: "worklog" as const, worker: w.worker, note: w.note, at: w.at, ...(w.links ? { links: w.links } : {}) })),
+      ...agentRunRows.map(r => ({
+        kind: "agentrun" as const,
+        runId: r.id,
+        column: r.column,
+        durationMs: r.duration_ms,
+        exitCode: r.exit_code,
+        peakTokens: r.peak_tokens,
+        toolCallCount: r.tool_call_count,
+        at: r.ended_at,
+      })),
+    ].sort((a, b) => a.at.localeCompare(b.at));
+
+    return { events };
+  } catch { return { events: [] }; }
+}
+
+export function getAgentRuns(cardId: string): AgentRun[] {
+  const db = getDb();
+  if (!db) return [];
+  try {
+    const rows = db.prepare(
+      `SELECT id, card_id, column, started_at, ended_at, duration_ms, exit_code, peak_tokens, tool_call_count, tool_calls, log_file, debug_log_file
+       FROM agent_runs WHERE card_id = ? ORDER BY started_at DESC`,
+    ).all(cardId) as AgentRunRow[];
+    return rows.map(r => ({
+      id: r.id,
+      cardId: r.card_id,
+      column: r.column,
+      startedAt: r.started_at,
+      endedAt: r.ended_at,
+      durationMs: r.duration_ms,
+      exitCode: r.exit_code,
+      peakTokens: r.peak_tokens,
+      toolCallCount: r.tool_call_count,
+      toolCalls: (() => { try { return JSON.parse(r.tool_calls); } catch { return []; } })(),
+      logFile: r.log_file,
+      debugLogFile: r.debug_log_file,
+    }));
+  } catch { return []; }
 }
 
 export function getActiveWork(): { active: ActiveEntry[]; log: LogEntry[] } {

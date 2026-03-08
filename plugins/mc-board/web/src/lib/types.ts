@@ -26,6 +26,15 @@ export interface Card {
   research: string;
   verify_url: string;
   work_log: WorkLogEntry[];
+  depends_on: string[];
+  attachments: Attachment[];
+}
+
+export interface Attachment {
+  path: string;
+  label?: string;
+  mime?: string;
+  created_at: string;
 }
 
 export interface WorkLogEntry {
@@ -33,6 +42,39 @@ export interface WorkLogEntry {
   worker: string;
   note: string;
   links?: string[];
+}
+
+export interface PickupLogEntry {
+  cardId: string;
+  worker: string;
+  col: string;
+  action: "pickup" | "release";
+  at: string;
+}
+
+export interface AgentRun {
+  id: string;
+  cardId: string;
+  column: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  exitCode: number | null;
+  peakTokens: number | null;
+  toolCallCount: number;
+  toolCalls: Array<{ name: string; detail: string }>;
+  logFile: string;
+  debugLogFile: string;
+}
+
+export type TimelineEvent =
+  | { kind: "column"; column: Column; at: string }
+  | { kind: "pickup"; worker: string; action: "pickup" | "release"; col: string; at: string }
+  | { kind: "worklog"; worker: string; note: string; at: string; links?: string[] }
+  | { kind: "agentrun"; runId: string; column: string; durationMs: number; exitCode: number | null; peakTokens: number | null; toolCallCount: number; at: string };
+
+export interface CardTimeline {
+  events: TimelineEvent[];
 }
 
 export interface Project {
@@ -62,8 +104,27 @@ export interface LogEntry {
   projectId?: string;
 }
 
+// Slim card used in the board listing — only fields needed to render cards in columns.
+// Heavy fields (problem, plan, notes, research, work_log, attachments, history) are
+// deferred to the individual GET /api/card/[id] fetch that fires when a card is opened.
+export interface BoardCard {
+  id: string;
+  title: string;
+  column: Column;
+  priority: Priority;
+  tags: string[];
+  project_id?: string;
+  work_type?: "work" | "verify";
+  linked_card_id?: string;
+  created_at: string;
+  updated_at: string;
+  depends_on: string[];
+  criteria_checked: number;
+  criteria_total: number;
+}
+
 export interface BoardData {
-  cards: Card[];
+  cards: BoardCard[];
   projects: Project[];
   activeIds: string[];
   activeWorkers: Record<string, string>;
@@ -74,4 +135,5 @@ export interface BoardData {
     inReview: number;
     shipped: number;
   };
+  globalShippedIds: string[];
 }

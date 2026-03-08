@@ -16,6 +16,28 @@ Create the directory if needed: mkdir -p ~/am/logs/cards/
 
 ---
 
+## mc-memo — Short-Term Working Memory (USE THIS)
+
+At the START of every session on a card, read the memo file to recover prior context:
+```
+openclaw mc-memo read {{CARD_ID}}
+```
+
+Write a memo whenever you:
+- Try a version/approach and it fails: `"tried Next.js 14 — tsconfigPath panic, do not retry"`
+- Complete an irreversible step: `"DB schema migrated, do not re-run migration"`
+- Hit an env conflict: `"TURBOPACK=1 inherited from mc-board — must unset before npm run dev"`
+- Resolve an ambiguity: `"decided to use flat files not SQLite — no structured query needed"`
+
+```
+openclaw mc-memo write {{CARD_ID}} "tried X — got error Y, do not retry"
+openclaw mc-memo write {{CARD_ID}} "completed irreversible step Z"
+```
+
+This prevents repeated failed approaches across long runs and resumed sessions.
+
+---
+
 ## Git Butler — REQUIRED before touching any code
 
 Multiple agents work concurrently. Each card MUST get its own Git Butler virtual branch
@@ -72,12 +94,9 @@ openclaw mc-board update {{CARD_ID}} --notes "work_dir: <work_dir> | branch: {{C
 4. Check off each criterion as YOU complete it (change `- [ ]` to `- [x]`).
 5. Update the card when done:
      openclaw mc-board update {{CARD_ID}} --notes '<date>: <what was done>' --criteria '<updated checklist>'
-6. Commit all work to the GB branch before moving to in-review:
-     but -C <work_dir> commit -m "feat({{CARD_ID}}): <summary of work done>" -a
-   (If `but commit` fails, fall back to: git -C <work_dir> add -A && git -C <work_dir> commit -m "feat({{CARD_ID}}): <summary>")
-7. If ALL criteria are checked:
+6. If ALL criteria are checked:
      openclaw mc-board move {{CARD_ID}} in-review
-8. Release the card when done:
+7. Release the card when done:
      openclaw mc-board release {{CARD_ID}} --worker board-worker-in-progress
 
 Silent exit when finished. No summary messages.

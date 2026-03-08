@@ -19,7 +19,7 @@ function findActiveLog(cardId: string): string | null {
     const dirPath = path.join(STATE_DIR, "logs", dir);
     if (!fs.existsSync(dirPath)) continue;
     try {
-      const files = fs.readdirSync(dirPath).filter(f => f.includes(cardId) && f.endsWith(".log"));
+      const files = fs.readdirSync(dirPath).filter(f => f.includes(cardId) && f.endsWith(".log") && !f.endsWith(".debug.log"));
       for (const f of files) {
         const full = path.join(dirPath, f);
         const { mtimeMs } = fs.statSync(full);

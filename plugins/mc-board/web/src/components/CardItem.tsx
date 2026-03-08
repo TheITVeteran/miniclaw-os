@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, Priority } from "@/lib/types";
+import { BoardCard, Priority } from "@/lib/types";
 import { memo, useState } from "react";
 
 function FocusBadge({ focused, onToggle }: { focused: boolean; onToggle?: (e: React.MouseEvent) => void }) {
@@ -30,12 +30,6 @@ const PRIO_STYLE: Record<Priority, { bg: string; color: string }> = {
   low:      { bg: "#27272a", color: "#a1a1aa" },
 };
 
-function criteriaProgress(criteria: string): { checked: number; total: number } {
-  const lines = criteria.replace(/\\n/g, "\n").split("\n").filter(l => /^\s*-\s*\[/.test(l));
-  const checked = lines.filter(l => /^\s*-\s*\[x\]/i.test(l)).length;
-  return { checked, total: lines.length };
-}
-
 function fmtDate(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -46,24 +40,42 @@ const PROG_COLOR = (pct: number) =>
   pct >= 100 ? "#22c55e" : pct >= 50 ? "#3b82f6" : "#f97316";
 
 interface Props {
-  card: Card;
+  card: BoardCard;
   projectName?: string;
   isActive: boolean;
   worker?: string;
+  blockedBy?: string[];
   onClick: (id: string) => void;
   onWatchClick?: (id: string) => void;
   onFocusToggle?: (id: string, focused: boolean) => void;
+  onInjectContext?: (ctx: string) => void;
 }
 
-export const CardItem = memo(function CardItem({ card, projectName, isActive, worker, onClick, onWatchClick, onFocusToggle }: Props) {
-  const { checked, total } = criteriaProgress(card.acceptance_criteria);
+export const CardItem = memo(function CardItem({ card, projectName, isActive, worker, blockedBy, onClick, onWatchClick, onFocusToggle, onInjectContext }: Props) {
+  const { checked, total } = { checked: card.criteria_checked, total: card.criteria_total };
   const pct = total > 0 ? Math.round((checked / total) * 100) : -1;
   const focused = card.tags.includes("focus");
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!onInjectContext) return;
+    e.preventDefault();
+    const lines = [
+      `[Card: ${card.id}] ${card.title}`,
+      `Column: ${card.column}`,
+      `Priority: ${card.priority}`,
+    ];
+    if (card.tags.length > 0) lines.push(`Tags: ${card.tags.join(", ")}`);
+    if (total > 0) {
+      lines.push(`Criteria: ${checked}/${total} done`);
+    }
+    onInjectContext(lines.join("\n"));
+  };
 
   return (
     <div
       data-card-id={card.id}
       onClick={() => onClick(card.id)}
+      onContextMenu={handleContextMenu}
       className={`card${isActive ? " card--active" : ""}`}
     >
       {/* Worker strip — click opens live log */}
@@ -101,6 +113,20 @@ export const CardItem = memo(function CardItem({ card, projectName, isActive, wo
           title={isActive ? "View live log" : undefined}
         />
       </div>
+
+      {/* Blocker banner */}
+      {blockedBy && blockedBy.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "flex-start", gap: 4, flexWrap: "wrap",
+          marginBottom: 4, padding: "3px 6px", borderRadius: 3,
+          background: "#431407", border: "1px solid #7c2d12",
+        }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0 }}>blocked</span>
+          <span style={{ fontSize: 10, color: "#fb923c", fontFamily: "var(--font-geist-mono), ui-monospace, monospace" }}>
+            {blockedBy.join(", ")}
+          </span>
+        </div>
+      )}
 
       {/* Type badge */}
       {card.work_type && (

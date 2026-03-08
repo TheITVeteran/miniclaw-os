@@ -90,5 +90,25 @@ export function openDb(stateDir: string): Database {
   try { db.exec(`ALTER TABLE projects ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE projects ADD COLUMN github_repo TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT ''`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE cards ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'`); } catch { /* already exists */ }
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL,
+        column TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        exit_code INTEGER,
+        peak_tokens INTEGER,
+        tool_call_count INTEGER NOT NULL DEFAULT 0,
+        tool_calls TEXT NOT NULL DEFAULT '[]',
+        log_file TEXT NOT NULL DEFAULT '',
+        debug_log_file TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_card ON agent_runs(card_id);
+    `);
+  } catch { /* already exists */ }
   return db;
 }

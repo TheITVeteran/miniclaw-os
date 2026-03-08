@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback } from "react";
-import type { Card, Column as ColumnType, Project } from "@/lib/types";
+import type { BoardCard, Column as ColumnType, Project } from "@/lib/types";
 import { ColumnShell } from "./ColumnShell";
 import { TriageControls } from "./TriageControls";
 import { CardItem } from "./CardItem";
@@ -15,26 +15,28 @@ function lsMaxKey(column: ColumnType) { return `mc-board:${column}-triage:maxCon
 
 interface Props {
   column: ColumnType;
-  cards: Card[];
+  cards: BoardCard[];
+  globalShippedIds?: Set<string>;
   projects: Project[];
   activeIds: Set<string>;
   activeWorkers?: Record<string, string>;
   onCardClick: (id: string) => void;
   onWatchClick?: (id: string) => void;
   onFocusToggle?: (cardId: string, focused: boolean) => void;
+  onInjectContext?: (ctx: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }
 
 interface TriageHeaderProps {
   column: ColumnType;
-  topCards: Card[];
+  topCards: BoardCard[];
   onOpenTriage: () => void;
+  onOpenWork?: (cards: BoardCard[]) => void;
 }
 
-function TriageColumnHeader({ column, topCards, onOpenTriage }: TriageHeaderProps) {
+function TriageColumnHeader({ column, topCards, onOpenTriage, onOpenWork }: TriageHeaderProps) {
   const triage = useTriageColumn(column);
-  const [launching, setLaunching] = useState(false);
 
   const [maxConcurrent, setMaxConcurrent] = useState<number>(() => {
     if (typeof window === "undefined") return 3;
@@ -53,24 +55,9 @@ function TriageColumnHeader({ column, topCards, onOpenTriage }: TriageHeaderProp
 
   const workCards = topCards.slice(0, maxConcurrent);
 
-  const handleWork = useCallback(async () => {
-    if (workCards.length === 0) return;
-    // All triage columns: fire-and-forget, no modal
-    setLaunching(true);
-    try {
-      const promptRes = await fetch(`/api/process/${column}`);
-      const { prompt } = await promptRes.json() as { prompt: string };
-      await Promise.all(workCards.map(card =>
-        fetch(`/api/process/${column}/${card.id}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt }),
-        }).catch(() => {})
-      ));
-    } finally {
-      setLaunching(false);
-    }
-  }, [column, workCards]);
+  const handleOpenWork = useCallback(() => {
+    if (workCards.length > 0) onOpenWork?.(workCards);
+  }, [workCards, onOpenWork]);
 
   return (
     <TriageControls
@@ -78,15 +65,18 @@ function TriageColumnHeader({ column, topCards, onOpenTriage }: TriageHeaderProp
       maxConcurrent={maxConcurrent}
       onMaxConcurrentChange={handleMaxChange}
       onOpenTriage={onOpenTriage}
-      onOpenWork={handleWork}
+      onOpenWork={column === "backlog" ? undefined : handleOpenWork}
       hasWorkCards={workCards.length > 0}
-      launching={launching}
+      hasTriageCards={topCards.length > 0}
+      showTriageButton={column === "backlog"}
     />
   );
 }
 
-export function Column({ column, cards, projects, activeIds, activeWorkers, onCardClick, onWatchClick, onFocusToggle, collapsed, onToggleCollapse }: Props) {
+export function Column({ column, cards, globalShippedIds, projects, activeIds, activeWorkers, onCardClick, onWatchClick, onFocusToggle, onInjectContext, collapsed, onToggleCollapse }: Props) {
   const [showTriage, setShowTriage] = useState(false);
+  const [showWork, setShowWork] = useState(false);
+  const [workModalCards, setWorkModalCards] = useState<BoardCard[]>([]);
   const hasTriage = TRIAGE_COLUMNS.has(column);
 
   const projectMap = useMemo(
@@ -94,8 +84,20 @@ export function Column({ column, cards, projects, activeIds, activeWorkers, onCa
     [projects],
   );
 
+  // Use globalShippedIds from API (covers cross-project deps); fall back to local computation
+  const shippedIds = useMemo(
+    () => globalShippedIds ?? new Set(cards.filter(c => c.column === "shipped").map(c => c.id)),
+    [globalShippedIds, cards],
+  );
+
   const colCards = useMemo(
-    () => cards.filter(c => c.column === column),
+    () => cards
+      .filter(c => c.column === column)
+      .sort((a, b) => {
+        const aFocused = a.tags?.includes("focus") ? 0 : 1;
+        const bFocused = b.tags?.includes("focus") ? 0 : 1;
+        return aFocused - bFocused;
+      }),
     [cards, column],
   );
 
@@ -111,6 +113,7 @@ export function Column({ column, cards, projects, activeIds, activeWorkers, onCa
             column={column}
             topCards={colCards}
             onOpenTriage={() => setShowTriage(true)}
+            onOpenWork={(cards) => { setWorkModalCards(cards); setShowWork(true); }}
           />
         ) : undefined}
       >
@@ -123,9 +126,11 @@ export function Column({ column, cards, projects, activeIds, activeWorkers, onCa
                 projectName={card.project_id ? projectMap[card.project_id] : undefined}
                 isActive={activeIds.has(card.id)}
                 worker={activeWorkers?.[card.id]}
+                blockedBy={column === "backlog" ? card.depends_on.filter(dep => !shippedIds.has(dep)) : []}
                 onClick={onCardClick}
                 onWatchClick={onWatchClick}
                 onFocusToggle={onFocusToggle}
+                onInjectContext={onInjectContext}
               />
             ))
         }
@@ -133,6 +138,10 @@ export function Column({ column, cards, projects, activeIds, activeWorkers, onCa
 
       {showTriage && (
         <TriageModal column={column} onClose={() => setShowTriage(false)} />
+      )}
+
+      {showWork && (
+        <WorkModal column={column} cards={workModalCards} onClose={() => setShowWork(false)} />
       )}
     </>
   );

@@ -6,10 +6,6 @@
  * Phase 2: messages return (requires openclaw fork with messages? in hook result).
  */
 
-import { execFileSync } from "child_process";
-import { existsSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   isChannelSession,
@@ -167,8 +163,6 @@ export default function register(api: OpenClawPluginApi) {
     applyToChannels?: boolean;
     applyToDMs?: boolean;
     replaceMessages?: boolean;
-    mimicEnabled?: boolean;
-    voiceContextBin?: string;
   };
 
   const windowMinutes = cfg.windowMinutes ?? 60;
@@ -178,9 +172,6 @@ export default function register(api: OpenClawPluginApi) {
   const applyToChannels = cfg.applyToChannels ?? true;
   const applyToDMs = cfg.applyToDMs ?? false;
   const replaceMessages = cfg.replaceMessages ?? false;
-  const mimicEnabled = cfg.mimicEnabled ?? true;
-  const stateDir = process.env.OPENCLAW_STATE_DIR ?? join(homedir(), ".openclaw");
-  const voiceContextBin = cfg.voiceContextBin ?? join(stateDir, "miniclaw", "system", "bin", "voice-context");
 
   // Cumulative stats (in-memory, resets on restart)
   const stats: SessionStats = {
@@ -259,24 +250,6 @@ export default function register(api: OpenClawPluginApi) {
 
     // 3. Build context summary for prependContext
     const contextParts: string[] = [];
-
-    // Mimic layer: inject human's voice profile as a style-priming block.
-    // voice-context outputs a single paragraph describing how the human writes,
-    // or nothing if opted out / no profile exists. Additive — does not replace AM's identity.
-    if (mimicEnabled && existsSync(voiceContextBin)) {
-      try {
-        const voiceBlock = execFileSync(voiceContextBin, [], {
-          encoding: "utf8",
-          timeout: 3000,
-        }).trim();
-        if (voiceBlock) {
-          contextParts.push(`[Voice register: ${voiceBlock}]`);
-          api.logger.info("mc-context: mimic layer active — voice profile injected");
-        }
-      } catch {
-        // voice-context unavailable or errored — skip silently
-      }
-    }
 
     if (droppedByAge > 0 || imagesPruned > 0 || droppedByToolRepair > 0) {
       let summary = `[Context window: showing ${pruned.length} of ${totalBefore} messages`;
@@ -418,8 +391,7 @@ export default function register(api: OpenClawPluginApi) {
         `Max images: ${maxImagesInHistory}\n` +
         `Apply to channels: ${applyToChannels}\n` +
         `Apply to DMs: ${applyToDMs}\n` +
-        `Replace messages (fork): ${replaceMessages}\n` +
-        `Mimic layer: ${mimicEnabled ? `enabled (${voiceContextBin})` : "disabled"}`,
+        `Replace messages (fork): ${replaceMessages}`,
     }),
   });
 }

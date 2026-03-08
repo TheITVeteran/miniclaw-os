@@ -14,6 +14,7 @@ interface CardRow {
   project_id: string | null;
   work_type: string | null;
   linked_card_id: string | null;
+  depends_on: string;
   created_at: string;
   updated_at: string;
   problem_description: string;
@@ -33,6 +34,7 @@ interface HistoryRow {
 }
 
 function rowToCard(row: CardRow, history: HistoryRow[]): Card {
+  const dependsOn = (() => { try { const v = JSON.parse(row.depends_on || "[]"); return Array.isArray(v) ? v as string[] : []; } catch { return []; } })();
   return {
     id: row.id,
     title: row.title,
@@ -42,6 +44,7 @@ function rowToCard(row: CardRow, history: HistoryRow[]): Card {
     ...(row.project_id ? { project_id: row.project_id } : {}),
     ...(row.work_type ? { work_type: row.work_type as WorkType } : {}),
     ...(row.linked_card_id ? { linked_card_id: row.linked_card_id } : {}),
+    ...(dependsOn.length > 0 ? { depends_on: dependsOn } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
     history: history.map(h => ({ column: h.col as Column, moved_at: h.moved_at })),
@@ -74,6 +77,7 @@ export class CardStore {
     project_id?: string;
     work_type?: WorkType;
     linked_card_id?: string;
+    depends_on?: string[];
     problem_description?: string;
     implementation_plan?: string;
     acceptance_criteria?: string;
@@ -86,10 +90,10 @@ export class CardStore {
     const id = generateId();
     this.db.prepare(
       `INSERT INTO cards
-         (id, title, col, priority, tags, project_id, work_type, linked_card_id,
+         (id, title, col, priority, tags, project_id, work_type, linked_card_id, depends_on,
           created_at, updated_at,
           problem_description, implementation_plan, acceptance_criteria, notes, review_notes, research, verify_url, work_log)
-       VALUES (?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+       VALUES (?, ?, 'backlog', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
     ).run(
       id,
       opts.title,
@@ -98,6 +102,7 @@ export class CardStore {
       opts.project_id ?? null,
       opts.work_type ?? null,
       opts.linked_card_id ?? null,
+      JSON.stringify(opts.depends_on ?? []),
       now,
       now,
       opts.problem_description ?? "",
@@ -135,7 +140,7 @@ export class CardStore {
   update(
     id: string,
     updates: Partial<Pick<Card,
-      | "title" | "priority" | "tags" | "project_id" | "work_type" | "linked_card_id"
+      | "title" | "priority" | "tags" | "project_id" | "work_type" | "linked_card_id" | "depends_on"
       | "problem_description" | "implementation_plan" | "acceptance_criteria"
       | "notes" | "review_notes" | "research" | "verify_url" | "work_log"
     >>,
@@ -145,7 +150,7 @@ export class CardStore {
     const m = { ...card, ...updates };
     this.db.prepare(
       `UPDATE cards
-       SET title=?, priority=?, tags=?, project_id=?, work_type=?, linked_card_id=?,
+       SET title=?, priority=?, tags=?, project_id=?, work_type=?, linked_card_id=?, depends_on=?,
            problem_description=?, implementation_plan=?, acceptance_criteria=?,
            notes=?, review_notes=?, research=?, verify_url=?, work_log=?, updated_at=?
        WHERE id=?`,
@@ -156,6 +161,7 @@ export class CardStore {
       m.project_id ?? null,
       m.work_type ?? null,
       m.linked_card_id ?? null,
+      JSON.stringify(m.depends_on ?? []),
       m.problem_description,
       m.implementation_plan,
       m.acceptance_criteria,

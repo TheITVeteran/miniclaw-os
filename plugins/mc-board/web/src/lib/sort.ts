@@ -7,11 +7,13 @@
  * 3. priority (critical → high → medium → low)
  * 4. age (oldest first)
  */
-import type { Card, Priority } from "./types";
+import type { Priority } from "./types";
 
 const PRIORITY_RANK: Record<Priority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-export function sortCards(cards: Card[], activeIds?: Set<string>): Card[] {
+type Sortable = { id: string; tags: string[]; priority: Priority; created_at: string };
+
+export function sortCards<T extends Sortable>(cards: T[], activeIds?: Set<string>): T[] {
   return [...cards].sort((a, b) => {
     const aF = a.tags.includes("focus") ? 0 : 1;
     const bF = b.tags.includes("focus") ? 0 : 1;

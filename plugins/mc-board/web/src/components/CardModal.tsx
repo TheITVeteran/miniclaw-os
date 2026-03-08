@@ -1,6 +1,6 @@
 "use client";
 
-import { Card, Project } from "@/lib/types";
+import { Card, CardTimeline, TimelineEvent, Project, Attachment } from "@/lib/types";
 import { useEffect, useState, useRef } from "react";
 import useSWR from "swr";
 import { marked } from "marked";
@@ -78,6 +78,7 @@ interface Props {
   onOpenLog?: () => void;
   onToast?: (icon: string, title: string, sub?: string) => void;
   onMutate?: () => void;
+  onInjectContext?: (ctx: string) => void;
 }
 
 function WatchLive({ cardId }: { cardId: string }) {
@@ -124,7 +125,136 @@ function WatchLive({ cardId }: { cardId: string }) {
   );
 }
 
-export function CardModal({ cardId, projects, activeIds, onClose, onOpenLog, onToast, onMutate }: Props) {
+const COLUMN_COLORS: Record<string, { bg: string; text: string }> = {
+  backlog:     { bg: "#3b0764", text: "#c084fc" },
+  "in-progress": { bg: "#1e3a5f", text: "#60a5fa" },
+  "in-review": { bg: "#451a03", text: "#fb923c" },
+  shipped:     { bg: "#052e16", text: "#4ade80" },
+};
+
+function TimelineSection({ cardId }: { cardId: string }) {
+  const { data: timeline, isLoading } = useSWR<CardTimeline>(
+    `/api/card/${cardId}/timeline`,
+    fetcher,
+    { refreshInterval: 5000 }
+  );
+  const [open, setOpen] = useState(false);
+
+  const events = timeline?.events ?? [];
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, background: "none", border: "none",
+          cursor: "pointer", padding: 0, marginBottom: open ? 10 : 0,
+        }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#71717a", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+          Timeline
+        </span>
+        {!isLoading && (
+          <span style={{ fontSize: 10, color: "#52525b", background: "#27272a", borderRadius: 10, padding: "0 6px", lineHeight: "18px" }}>
+            {events.length}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: "#52525b", marginLeft: 2 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div>
+          {isLoading ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[1, 2, 3].map(i => (
+                <div key={i} style={{ height: 36, background: "#27272a", borderRadius: 6, opacity: 0.5 }} />
+              ))}
+            </div>
+          ) : events.length === 0 ? (
+            <div style={{ color: "#52525b", fontSize: 12, padding: "8px 0", fontStyle: "italic" }}>
+              No timeline events yet.
+            </div>
+          ) : (
+            <div style={{ position: "relative" }}>
+              <div style={{
+                position: "absolute", left: 7, top: 8, bottom: 8, width: 1,
+                background: "#27272a", zIndex: 0,
+              }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {events.map((ev: TimelineEvent, i: number) => (
+                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 10, position: "relative", zIndex: 1 }}>
+                    {/* dot */}
+                    <div style={{
+                      width: 15, height: 15, borderRadius: "50%", flexShrink: 0, marginTop: 2,
+                      background: ev.kind === "column"
+                        ? (COLUMN_COLORS[ev.column]?.bg ?? "#27272a")
+                        : ev.kind === "pickup"
+                          ? (ev.action === "pickup" ? "#14532d" : "#1c1917")
+                          : "#27272a",
+                      border: `2px solid ${ev.kind === "column"
+                        ? (COLUMN_COLORS[ev.column]?.text ?? "#52525b")
+                        : ev.kind === "pickup"
+                          ? (ev.action === "pickup" ? "#4ade80" : "#78716c")
+                          : "#3f3f46"}`,
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0, paddingBottom: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {ev.kind === "column" && (
+                          <span style={{
+                            fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 4,
+                            background: COLUMN_COLORS[ev.column]?.bg ?? "#27272a",
+                            color: COLUMN_COLORS[ev.column]?.text ?? "#a1a1aa",
+                          }}>
+                            → {ev.column}
+                          </span>
+                        )}
+                        {ev.kind === "pickup" && (
+                          <>
+                            <span style={{ fontSize: 11, color: "#a1a1aa", fontWeight: 500 }}>{ev.worker}</span>
+                            <span style={{
+                              fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600,
+                              background: ev.action === "pickup" ? "#14532d" : "#1c1917",
+                              color: ev.action === "pickup" ? "#4ade80" : "#78716c",
+                            }}>
+                              {ev.action}
+                            </span>
+                            <span style={{
+                              fontSize: 10, padding: "1px 6px", borderRadius: 4,
+                              background: COLUMN_COLORS[ev.col]?.bg ?? "#27272a",
+                              color: COLUMN_COLORS[ev.col]?.text ?? "#71717a",
+                            }}>
+                              {ev.col}
+                            </span>
+                          </>
+                        )}
+                        {ev.kind === "worklog" && (
+                          <>
+                            <span style={{ fontSize: 11, color: "#a1a1aa", fontWeight: 500 }}>{ev.worker}</span>
+                            <span style={{ fontSize: 10, color: "#52525b" }}>note</span>
+                          </>
+                        )}
+                        <span style={{ fontSize: 10, color: "#52525b", fontFamily: "monospace", marginLeft: "auto" }}>
+                          {ev.at.slice(0, 16).replace("T", " ")}
+                        </span>
+                      </div>
+                      {ev.kind === "worklog" && ev.note && (
+                        <div style={{ fontSize: 11, color: "#71717a", marginTop: 2, lineHeight: 1.4, wordBreak: "break-word" }}>
+                          {ev.note.length > 120 ? ev.note.slice(0, 120) + "…" : ev.note}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CardModal({ cardId, projects, activeIds, onClose, onOpenLog, onToast, onMutate, onInjectContext }: Props) {
   const { data: card } = useSWR<Card>(
     cardId ? `/api/card/${cardId}` : null,
     fetcher,
@@ -237,8 +367,13 @@ export function CardModal({ cardId, projects, activeIds, onClose, onOpenLog, onT
           {SECTIONS.map(({ label, field }) => {
             const val = card[field] as string;
             if (!val?.trim()) return null;
+            const handleSectionContextMenu = (e: React.MouseEvent) => {
+              if (!onInjectContext) return;
+              e.preventDefault();
+              onInjectContext(`[${card.id}] ${label}:\n${unescapeNewlines(val).slice(0, 800)}${val.length > 800 ? "\n…(truncated)" : ""}`);
+            };
             return (
-              <div key={field}>
+              <div key={field} onContextMenu={handleSectionContextMenu}>
                 <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">{label}</h3>
                 <div
                   className="text-sm text-zinc-300 leading-relaxed space-y-1 font-mono"
@@ -281,6 +416,44 @@ export function CardModal({ cardId, projects, activeIds, onClose, onOpenLog, onT
               </div>
             </div>
           )}
+
+          {/* Attachments */}
+          {card.attachments && card.attachments.length > 0 && (
+            <div>
+              <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Attachments</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {card.attachments.map((a: Attachment, i: number) => (
+                  <a
+                    key={i}
+                    href={`/api/media?path=${encodeURIComponent(a.path)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ display: "block", borderRadius: 6, overflow: "hidden", border: "1px solid #3f3f46", background: "#18181b" }}
+                    title={a.label || a.path}
+                    onContextMenu={onInjectContext ? (e) => {
+                      e.preventDefault();
+                      onInjectContext(`[${card.id}] Attachment: ${a.label || a.path}\nPath: ${a.path}`);
+                    } : undefined}
+                  >
+                    <img
+                      src={`/api/media?path=${encodeURIComponent(a.path)}`}
+                      alt={a.label || "attachment"}
+                      style={{ width: "100%", height: "auto", display: "block" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    {a.label && (
+                      <div style={{ padding: "4px 6px", fontSize: 11, color: "#a1a1aa", fontFamily: "var(--font-geist-mono), ui-monospace, monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {a.label}
+                      </div>
+                    )}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Timeline */}
+          <TimelineSection cardId={card.id} />
         </div>
       )}
 

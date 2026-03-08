@@ -4,7 +4,8 @@ import { Board } from "./Board";
 import { MemoryTab } from "./MemoryTab";
 import { RolodexTab } from "./RolodexTab";
 import { Modal } from "./Modal";
-import { Project, Card } from "@/lib/types";
+import { ChatPanel } from "./ChatPanel";
+import { Project, BoardCard } from "@/lib/types";
 
 type Tab = "board" | "memory" | "rolodex";
 interface Toast { id: number; icon: string; title: string; sub?: string; exiting?: boolean; }
@@ -23,15 +24,22 @@ function getInitialProject(): string {
   return new URLSearchParams(window.location.search).get("project") ?? "";
 }
 
+function getChatOpen(): boolean {
+  try { return localStorage.getItem("mc-board:chat-open") === "true"; } catch { return false; }
+}
+
 export function AppShell({ initialTab, initialCardId, initialProjectId }: { initialTab?: Tab; initialCardId?: string; initialProjectId?: string }) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "board");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [notifsEnabled, setNotifsEnabled] = useState(getNotifsEnabled);
   const [counts, setCounts] = useState<Counts | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [allCards, setAllCards] = useState<Card[]>([]);
+  const [allCards, setAllCards] = useState<BoardCard[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>(initialProjectId ?? getInitialProject);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [pendingContext, setPendingContext] = useState<string | null>(null);
+  const [openCardId, setOpenCardId] = useState<string | null>(initialCardId ?? null);
 
   const showToast = useCallback((icon: string, title: string, sub?: string) => {
     const id = Date.now();
@@ -40,6 +48,25 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
       setToasts(t => t.map(x => x.id === id ? { ...x, exiting: true } : x));
       setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 220);
     }, 4800);
+  }, []);
+
+  // Rehydrate chatOpen from localStorage after mount (avoids SSR mismatch)
+  useEffect(() => {
+    setChatOpen(getChatOpen());
+  }, []);
+
+  const toggleChat = useCallback(() => {
+    setChatOpen(on => {
+      const next = !on;
+      try { localStorage.setItem("mc-board:chat-open", next ? "true" : "false"); } catch {}
+      return next;
+    });
+  }, []);
+
+  const handleInjectContext = useCallback((ctx: string) => {
+    setPendingContext(ctx);
+    setChatOpen(true);
+    try { localStorage.setItem("mc-board:chat-open", "true"); } catch {}
   }, []);
 
   const toggleNotifs = () => {
@@ -56,7 +83,17 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
     history.pushState(null, "", p ? `/board/project/${encodeURIComponent(p)}` : "/board");
   }, []);
 
-  const handleBoardData = useCallback((ps: Project[], c: Counts, cards: Card[]) => {
+  // Handle browser back/forward — sync React state with URL
+  useEffect(() => {
+    const onPopState = () => {
+      const match = window.location.pathname.match(/^\/board\/project\/([^/]+)/);
+      setSelectedProject(match ? decodeURIComponent(match[1]) : "");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const handleBoardData = useCallback((ps: Project[], c: Counts, cards: BoardCard[]) => {
     setProjects(ps);
     setCounts(c);
     setAllCards(cards);
@@ -104,7 +141,7 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
           {tab === "board" && projects.length > 0 && (() => {
             const proj = selectedProject ? projects.find(p => p.id === selectedProject) : null;
             const pCards = proj ? allCards.filter(c => c.project_id === proj.id) : [];
-            const colColors: Record<string, string> = { backlog: "#52525b", "in-progress": "#3b82f6", "in-review": "#a855f7", shipped: "#22c55e" };
+            const colColors: Record<string, string> = { backlog: "#7c3aed", "in-progress": "#3b82f6", "in-review": "#f59e0b", shipped: "#22c55e" };
             const countPills = (["in-progress", "in-review", "backlog", "shipped"] as const)
               .map(col => ({ col, n: pCards.filter(c => c.column === col).length }))
               .filter(x => x.n > 0);
@@ -183,6 +220,18 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
           </div>
         )}
 
+        {/* Chat toggle */}
+        <button
+          onClick={toggleChat}
+          className="flex items-center justify-center w-11 border-l border-zinc-800 shrink-0 hover:bg-zinc-900 transition-colors h-full"
+          title={chatOpen ? "Close chat" : "Open AM chat"}
+          style={{ color: chatOpen ? "#4ade80" : "#71717a" }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2Z" fill="currentColor" />
+          </svg>
+        </button>
+
         {/* Far right: alerts icon */}
         <button
           onClick={toggleNotifs}
@@ -197,25 +246,39 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
         </button>
       </div>
 
-      {/* Tab panels */}
-      <div className={`tab-panel${tab === "board" ? " active" : ""}`}>
-        <Board
-          selectedProject={selectedProject}
-          initialCardId={initialCardId}
-          onToast={showToast}
-          notifsEnabled={notifsEnabled}
-          onBoardData={handleBoardData}
+      {/* Main content + Chat panel flex row */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {/* Tab panels */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div className={`tab-panel${tab === "board" ? " active" : ""}`}>
+            <Board
+              selectedProject={selectedProject}
+              initialCardId={initialCardId}
+              onToast={showToast}
+              notifsEnabled={notifsEnabled}
+              onBoardData={handleBoardData}
+              onInjectContext={handleInjectContext}
+              onCardOpen={setOpenCardId}
+            />
+          </div>
+          <div className={`tab-panel${tab === "memory" ? " active" : ""}`}>
+            <MemoryTab />
+          </div>
+          <div className={`tab-panel${tab === "rolodex" ? " active" : ""}`}>
+            <RolodexTab />
+          </div>
+        </div>
+
+        {/* Chat panel — stays mounted across tabs */}
+        <ChatPanel
+          open={chatOpen}
+          onClose={toggleChat}
+          pendingContext={pendingContext}
+          onContextConsumed={() => setPendingContext(null)}
+          projectId={selectedProject || undefined}
+          activeCardId={openCardId ?? undefined}
         />
       </div>
-      <div className={`tab-panel${tab === "memory" ? " active" : ""}`}>
-        <MemoryTab />
-      </div>
-      <div className={`tab-panel${tab === "rolodex" ? " active" : ""}`}>
-        <RolodexTab />
-      </div>
-
-      {/* Footer */}
-      <div className="footer">MiniClaw Brain · port 4220</div>
 
       {/* Toasts */}
       <div className="toast-container">
@@ -303,7 +366,7 @@ export function AppShell({ initialTab, initialCardId, initialProjectId }: { init
                         {(["backlog","in-progress","in-review","shipped"] as const).map(col => {
                           const n = pCards.filter(c => c.column === col).length;
                           if (!n) return null;
-                          const colors: Record<string, string> = { backlog: "#52525b", "in-progress": "#3b82f6", "in-review": "#a855f7", shipped: "#22c55e" };
+                          const colors: Record<string, string> = { backlog: "#7c3aed", "in-progress": "#3b82f6", "in-review": "#f59e0b", shipped: "#22c55e" };
                           const label = col === "in-progress" ? "prog" : col === "in-review" ? "rev" : col;
                           return (
                             <span key={col} style={{ fontSize: 11, color: colors[col] ?? "#71717a" }}>

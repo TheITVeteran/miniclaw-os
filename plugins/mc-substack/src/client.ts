@@ -51,7 +51,7 @@ export class SubstackClient {
   }
 
   async listDrafts(limit = 25): Promise<SubstackDraft[]> {
-    const resp = await fetch(`${this.base}/api/v1/posts?draft=true&limit=${limit}`, {
+    const resp = await fetch(`${this.base}/api/v1/drafts?limit=${Math.min(limit, 25)}`, {
       headers: this.headers(),
     });
     if (!resp.ok) throw new Error(`List drafts failed: ${resp.status}`);
@@ -88,6 +88,14 @@ export class SubstackClient {
       const text = await dateResp.text();
       throw new Error(`Set post_date ${id} failed ${dateResp.status}: ${text.substring(0, 300)}`);
     }
+  }
+
+  async deleteDraft(id: number | string): Promise<boolean> {
+    const resp = await fetch(`${this.base}/api/v1/drafts/${id}`, {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    return resp.ok;
   }
 
   async publishDraft(id: number | string, options: { send?: boolean; shareAutomatically?: boolean } = {}): Promise<boolean> {

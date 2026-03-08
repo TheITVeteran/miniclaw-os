@@ -12,6 +12,8 @@ export interface CronJob {
   enabled: boolean;
   lastRun?: string;
   nextRun?: string;
+  lastRunAtMs?: number;
+  maxConcurrent?: number;
   payload?: { message?: string; messageFile?: string };
 }
 
@@ -29,12 +31,16 @@ export function listCronJobs(): CronJob[] {
     const raw = JSON.parse(fs.readFileSync(JOBS_FILE, "utf-8"));
     const jobs: CronJob[] = [];
     for (const [id, job] of Object.entries(raw as Record<string, unknown>)) {
+      if (id === "version" || id === "jobs") continue;
+      if (!job || typeof job !== "object" || Array.isArray(job)) continue;
       const j = job as Record<string, unknown>;
       jobs.push({
         id,
         name: String(j.name ?? id),
         schedule: String(j.schedule ?? ""),
         enabled: j.enabled !== false,
+        maxConcurrent: typeof j.maxConcurrent === "number" ? j.maxConcurrent as number : undefined,
+        lastRunAtMs: typeof j.lastRunAtMs === "number" ? j.lastRunAtMs as number : undefined,
         payload: (j.payload as CronJob["payload"]) ?? {},
       });
     }
@@ -42,7 +48,7 @@ export function listCronJobs(): CronJob[] {
   } catch { return []; }
 }
 
-export function updateCronJob(id: string, patch: Partial<Pick<CronJob, "schedule" | "enabled">>): CronJob | null {
+export function updateCronJob(id: string, patch: Partial<Pick<CronJob, "schedule" | "enabled" | "maxConcurrent" | "lastRunAtMs">>): CronJob | null {
   const raw: Record<string, unknown> = fs.existsSync(JOBS_FILE)
     ? JSON.parse(fs.readFileSync(JOBS_FILE, "utf-8"))
     : {};
@@ -50,6 +56,8 @@ export function updateCronJob(id: string, patch: Partial<Pick<CronJob, "schedule
   const job = raw[id] as Record<string, unknown>;
   if (patch.schedule !== undefined) job.schedule = patch.schedule;
   if (patch.enabled !== undefined) job.enabled = patch.enabled;
+  if (patch.maxConcurrent !== undefined) job.maxConcurrent = patch.maxConcurrent;
+  if (patch.lastRunAtMs !== undefined) job.lastRunAtMs = patch.lastRunAtMs;
   fs.mkdirSync(require("node:path").dirname(JOBS_FILE), { recursive: true });
   fs.writeFileSync(JOBS_FILE, JSON.stringify(raw, null, 2), "utf-8");
   return {
@@ -57,6 +65,8 @@ export function updateCronJob(id: string, patch: Partial<Pick<CronJob, "schedule
     name: String(job.name ?? id),
     schedule: String(job.schedule ?? ""),
     enabled: job.enabled !== false,
+    maxConcurrent: typeof job.maxConcurrent === "number" ? job.maxConcurrent : undefined,
+    lastRunAtMs: typeof job.lastRunAtMs === "number" ? job.lastRunAtMs : undefined,
     payload: (job.payload as CronJob["payload"]) ?? {},
   };
 }

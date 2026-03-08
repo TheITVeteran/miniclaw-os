@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { BoardData, Project } from "@/lib/types";
+import { BoardData, BoardCard, Project } from "@/lib/types";
 import { Column } from "./Column";
 import { CardModal } from "./CardModal";
 import { WatchModal } from "./WatchModal";
@@ -26,10 +26,12 @@ interface Props {
   initialCardId?: string;
   onToast?: (icon: string, title: string, sub?: string) => void;
   notifsEnabled?: boolean;
-  onBoardData?: (projects: Project[], counts: Counts, allCards: import("@/lib/types").Card[]) => void;
+  onBoardData?: (projects: Project[], counts: Counts, allCards: BoardCard[]) => void;
+  onInjectContext?: (ctx: string) => void;
+  onCardOpen?: (cardId: string | null) => void;
 }
 
-function fuzzyMatch(query: string, card: { id: string; title: string; tags: string[] }): boolean {
+function fuzzyMatch(query: string, card: Pick<BoardCard, "id" | "title" | "tags">): boolean {
   const q = query.toLowerCase();
   const haystack = `${card.id} ${card.title} ${card.tags.join(" ")}`.toLowerCase();
   return haystack.includes(q);
@@ -42,7 +44,7 @@ const COL_LABEL: Record<string, string> = {
   shipped: "Shipped",
 };
 
-export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, onBoardData }: Props) {
+export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, onBoardData, onInjectContext, onCardOpen }: Props) {
   const [openCardId, setOpenCardId] = useState<string | null>(initialCardId ?? null);
   const [watchCardId, setWatchCardId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -65,15 +67,17 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
   // Card open/close with URL
   const openCard = useCallback((id: string) => {
     setOpenCardId(id);
+    onCardOpen?.(id);
     const card = data?.cards.find(c => c.id === id);
     const projId = card?.project_id;
     history.pushState(null, "", projId ? `/board/project/${projId}/c/${id}` : `/board/c/${id}`);
-  }, [data]);
+  }, [data, onCardOpen]);
 
   const closeCard = useCallback(() => {
     setOpenCardId(null);
+    onCardOpen?.(null);
     history.pushState(null, "", selectedProject ? `/board/project/${selectedProject}` : "/board");
-  }, [selectedProject]);
+  }, [selectedProject, onCardOpen]);
 
   // Pass board data up to AppShell
   useEffect(() => {
@@ -200,6 +204,7 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
 
   const cards = data?.cards ?? [];
   const projects = data?.projects ?? [];
+  const globalShippedIds = new Set(data?.globalShippedIds ?? []);
 
   return (
     <div className="board-tab">
@@ -255,12 +260,14 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
             key={col}
             column={col}
             cards={cards}
+            globalShippedIds={globalShippedIds}
             projects={projects}
             activeIds={activeIds}
             activeWorkers={data?.activeWorkers}
             onCardClick={openCard}
             onWatchClick={setWatchCardId}
             onFocusToggle={handleFocusToggle}
+            onInjectContext={onInjectContext}
             collapsed={col === "shipped" ? !shippedOpen : undefined}
             onToggleCollapse={col === "shipped" ? () => setShippedOpen(o => !o) : undefined}
           />
@@ -275,6 +282,7 @@ export function Board({ selectedProject, initialCardId, onToast, notifsEnabled, 
         onOpenLog={openCardId ? () => { setWatchCardId(openCardId); setLogOpen(true); } : undefined}
         onToast={onToast}
         onMutate={() => mutate()}
+        onInjectContext={onInjectContext}
       />
       {logOpen && watchCardId && (() => {
         const card = data?.cards.find(c => c.id === watchCardId);

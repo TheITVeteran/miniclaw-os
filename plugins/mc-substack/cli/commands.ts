@@ -116,6 +116,35 @@ export function registerSubstackCommands(ctx: Ctx): void {
       }
     });
 
+  // ---- delete-draft ----
+  sub
+    .command("delete-draft [id]")
+    .description("Delete a draft/post by ID. Use --all to delete every non-published draft.")
+    .option("--all", "Delete all non-published drafts")
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (id: string | undefined, opts: { all?: boolean; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
+      if (opts.all) {
+        const drafts = await client.listDrafts(50);
+        const targets = drafts.filter((d) => !d.is_published);
+        if (!targets.length) { console.log("No unpublished drafts found."); return; }
+        console.log(`Deleting ${targets.length} draft(s)...`);
+        for (const d of targets) {
+          const ok = await client.deleteDraft(d.id);
+          console.log(`  ${ok ? "✓" : "✗"} ${d.id}  ${d.draft_title || "(untitled)"}`);
+        }
+        return;
+      }
+      if (!id) { console.error("Provide a draft ID or use --all."); process.exit(1); }
+      const ok = await client.deleteDraft(id);
+      if (ok) {
+        console.log(`Deleted draft ${id}.`);
+      } else {
+        console.error(`Failed to delete draft ${id}.`);
+        process.exit(1);
+      }
+    });
+
   // ---- upload-image ----
   sub
     .command("upload-image <file>")
@@ -200,6 +229,42 @@ export function registerSubstackCommands(ctx: Ctx): void {
       } else {
         console.log(`Replaced ${count} occurrence(s) of "${search}" → "${replace}"`);
       }
+    });
+
+  // ---- copy-images ----
+  sub
+    .command("copy-images <fromId> <toId>")
+    .description("Copy captionedImage nodes from one draft to another (no re-upload)")
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (fromId: string, toId: string, opts: { publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
+
+      console.log(`Fetching source draft ${fromId}...`);
+      const src = await client.getDraft(fromId);
+      const srcDoc = JSON.parse(src.draft_body) as { type: string; content: Array<{ type: string; [k: string]: unknown }> };
+      const imgNodes = srcDoc.content.filter((n) => n.type === "captionedImage");
+      if (imgNodes.length === 0) {
+        console.error(`No captionedImage nodes found in draft ${fromId}.`);
+        process.exit(1);
+      }
+      console.log(`  Found ${imgNodes.length} captionedImage node(s).`);
+
+      console.log(`Fetching target draft ${toId}...`);
+      const dst = await client.getDraft(toId);
+      const dstDoc = JSON.parse(dst.draft_body) as { type: string; content: Array<{ type: string; [k: string]: unknown }> };
+
+      // Remove any existing captionedImage nodes from target to avoid dupes
+      const filtered = dstDoc.content.filter((n) => n.type !== "captionedImage");
+
+      // Splice before the last paragraph (or append if no paragraphs)
+      const lastParaIdx = filtered.reduce((acc, n, i) => (n.type === "paragraph" ? i : acc), -1);
+      const insertAt = lastParaIdx >= 0 ? lastParaIdx : filtered.length;
+      filtered.splice(insertAt, 0, ...imgNodes);
+      dstDoc.content = filtered;
+
+      console.log(`Updating target draft ${toId}...`);
+      await client.updateDraft(toId, { draft_body: JSON.stringify(dstDoc) });
+      console.log(`  Done. Copied ${imgNodes.length} image(s) from ${fromId} → ${toId}.`);
     });
 
   // ---- post-comic ----

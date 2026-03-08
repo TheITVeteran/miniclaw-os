@@ -15,9 +15,7 @@
       "applyToDMs":         { "type": "boolean" },
       "replaceMessages":    { "type": "boolean" },
       "useHaikuForChannels":  { "type": "boolean" },
-      "maxToolResultChars":   { "type": "number" },
-      "mimicEnabled":         { "type": "boolean" },
-      "voiceContextBin":      { "type": "string" }
+      "maxToolResultChars":   { "type": "number" }
     }
   }
 }

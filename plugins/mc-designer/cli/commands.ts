@@ -5,7 +5,7 @@ import type { Logger } from "openclaw/plugin-sdk";
 import type { DesignerConfig } from "../src/config.js";
 import type { DesignerStore } from "../src/store.js";
 import type { GeminiClient } from "../src/gemini.js";
-import { compositeCanvas, stripBackground } from "../src/composite.js";
+import { compositeCanvas, stripBackground, chromaKey } from "../src/composite.js";
 import type { Layer } from "../src/types.js";
 import { promptAndVaultKey, isAuthError } from "../src/vault.js";
 import { displayImage } from "../src/display.js";
@@ -458,6 +458,22 @@ export function registerDesignerCommands(ctx: Ctx): void {
       const buffer = await stripBackground(file);
       fs.writeFileSync(outPath, buffer);
       console.log(`Background stripped: ${outPath}`);
+    });
+
+  alpha
+    .command("chroma-key <file>")
+    .description("Replace a solid-color background with transparency (grey-key for Gemini images)")
+    .option("--color <hex>", "Target background color to key out", "#808080")
+    .option("--tolerance <n>", "Euclidean RGB distance tolerance (0–441)", "30")
+    .action(async (file: string, opts: { color: string; tolerance: string }) => {
+      if (!fs.existsSync(file)) { console.error(`File not found: ${file}`); process.exit(1); }
+      const tolerance = parseInt(opts.tolerance, 10);
+      const outPath = file.replace(/(\.[^.]+)$/, ".chromakey.png");
+      console.log(`Chroma-keying "${file}" (color=${opts.color}, tolerance=${tolerance}) ...`);
+      const buffer = await chromaKey(file, opts.color, tolerance);
+      fs.writeFileSync(outPath, buffer);
+      console.log(`Chroma-keyed image saved: ${outPath}`);
+      await displayImage(outPath);
     });
 
   // ---- designer stats ----

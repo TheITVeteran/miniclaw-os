@@ -9,12 +9,13 @@ export function GET() {
 
 export async function PATCH(req: Request) {
   const body = await req.json();
-  const { id, schedule, enabled } = body as { id: string; schedule?: string; enabled?: boolean };
+  const { id, schedule, enabled, maxConcurrent } = body as { id: string; schedule?: string; enabled?: boolean; maxConcurrent?: number };
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-  const patch: { schedule?: string; enabled?: boolean } = {};
+  const patch: { schedule?: string; enabled?: boolean; maxConcurrent?: number } = {};
   if (schedule !== undefined) patch.schedule = schedule;
   if (enabled !== undefined) patch.enabled = enabled;
+  if (maxConcurrent !== undefined) patch.maxConcurrent = maxConcurrent;
 
   const updated = updateCronJob(id, patch);
   if (!updated) return NextResponse.json({ error: "job not found" }, { status: 404 });
