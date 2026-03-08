@@ -161,9 +161,10 @@ export class FileServer {
  * Detects /Users/... and ~/... paths.
  */
 export function extractFilePaths(text: string): string[] {
+  const homeEscaped = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const patterns = [
     /~\/[^\s\)\]\}\|`]*/g, // ~/path/to/file
-    /\/Users\/[^\s\)\]\}\|`]*/g, // /Users/...
+    new RegExp(`${homeEscaped}/[^\\s\\)\\]\\}\\|\`]*`, "g"), // /home/user/... or /Users/user/...
   ];
 
   const paths: string[] = [];
