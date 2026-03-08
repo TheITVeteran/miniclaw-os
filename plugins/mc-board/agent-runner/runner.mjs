@@ -231,6 +231,13 @@ function spawnFullAgent(row, card, project) {
 
   fs.writeFileSync(debugFile, "");
 
+  // Pre-open file descriptors so child can write after runner restarts.
+  // Using FDs (not pipes) means no SIGPIPE when the runner's read-end closes.
+  const rawJsonlFile = path.join(logDir, `${ts0}-${row.card_id}.raw.jsonl`);
+  const stderrFile   = path.join(logDir, `${ts0}-${row.card_id}.stderr.log`);
+  const stdoutFd = fs.openSync(rawJsonlFile, "a");
+  const stderrFd = fs.openSync(stderrFile, "a");
+
   const proc = spawn("stdbuf", [
     "-oL",
     CLAUDE_BIN,
@@ -240,9 +247,13 @@ function spawnFullAgent(row, card, project) {
     "--verbose",
     "--debug-file", debugFile,
     "--dangerously-skip-permissions",
-  ], { env, cwd: agentCwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  ], { env, cwd: agentCwd, stdio: ["ignore", stdoutFd, stderrFd], detached: true });
 
-  proc.unref(); // survive runner restart
+  // Parent closes its copies of the FDs — child holds its own references.
+  fs.closeSync(stdoutFd);
+  fs.closeSync(stderrFd);
+  // Detach from runner event loop — child survives runner restart.
+  proc.unref();
 
   writeFile(`[${ts()}] pid ${proc.pid}\n`);
   log(`spawned full agent for ${row.card_id} pid=${proc.pid} log=${logFile}`);
@@ -253,7 +264,9 @@ function spawnFullAgent(row, card, project) {
   const toolCallsAccum = [];
   const NOISE = /ENOENT|Broken symlink|detectFileEncoding|managed-settings|settings\.local|\[DEBUG\]/;
 
+  // Tail debug file (unref so it doesn't block runner exit)
   const tail = spawn("tail", ["-f", debugFile]);
+  tail.unref();
   tail.stdout.on("data", (chunk) => {
     for (const line of chunk.toString().split("\n").filter(l => l.trim())) {
       if (NOISE.test(line)) continue;
@@ -265,7 +278,10 @@ function spawnFullAgent(row, card, project) {
     }
   });
 
-  proc.stdout.on("data", (chunk) => {
+  // Tail the raw jsonl file for real-time JSON parsing (replaces proc.stdout pipe)
+  const tailOut = spawn("tail", ["-f", rawJsonlFile]);
+  tailOut.unref();
+  tailOut.stdout.on("data", (chunk) => {
     buf += chunk.toString();
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
@@ -289,16 +305,11 @@ function spawnFullAgent(row, card, project) {
     }
   });
 
-  proc.stderr.on("data", (chunk) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (!line.trim() || NOISE.test(line)) continue;
-      logDbg(line);
-    }
-  });
-
+  // Note: proc.on('close') only fires if this runner process is still alive when claude exits.
+  // If the runner restarts first, the audit row is not written — acceptable tradeoff.
   proc.on("close", (code) => {
     running.delete(row.id);
-    setTimeout(() => tail.kill(), 300);
+    setTimeout(() => { tail.kill(); tailOut.kill(); }, 300);
     writeFile(`\n[${ts()}] done (exit ${code})\n`);
     log(`agent done for ${row.card_id} exit=${code}`);
 
@@ -337,6 +348,7 @@ function spawnFullAgent(row, card, project) {
   proc.on("error", (err) => {
     running.delete(row.id);
     tail.kill();
+    tailOut.kill();
     log(`spawn error for ${row.card_id}: ${err.message}`);
     const db = getDb();
     markFailed(db, row.id);
