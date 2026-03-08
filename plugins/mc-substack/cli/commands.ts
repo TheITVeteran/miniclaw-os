@@ -12,16 +12,31 @@ interface Ctx {
   logger: Logger;
 }
 
-function getClient(cfg: SubstackConfig): SubstackClient {
-  const raw = readCookieFromVault(cfg.vaultBin);
+function resolvePublication(cfg: SubstackConfig, pubName?: string): { subdomain: string; vaultKey: string } {
+  if (pubName) {
+    const pub = cfg.publications?.[pubName];
+    if (!pub) {
+      console.error(`Unknown publication: "${pubName}". Check publications config in openclaw.json.`);
+      process.exit(1);
+    }
+    return { subdomain: pub.subdomain, vaultKey: pub.vaultKey };
+  }
+  return { subdomain: cfg.subdomain, vaultKey: "substack-sid" };
+}
+
+function getClient(cfg: SubstackConfig, pubName?: string): SubstackClient {
+  const { subdomain, vaultKey } = resolvePublication(cfg, pubName);
+  const raw = readCookieFromVault(cfg.vaultBin, vaultKey);
   if (!raw) {
-    console.error("No Substack session cookie stored. Run: mc mc-substack auth");
+    const authHint = pubName ? `mc mc-substack auth --publication ${pubName}` : "mc mc-substack auth";
+    console.error(`No Substack session cookie stored for ${pubName ?? "default"}. Run: ${authHint}`);
     process.exit(1);
   }
   // vault `get` returns "key = value" — extract value and URL-decode
   const value = raw.includes(" = ") ? raw.split(" = ").slice(1).join(" = ").trim() : raw;
   const sid = decodeURIComponent(value);
-  return new SubstackClient(cfg, sid);
+  const pubCfg = { ...cfg, subdomain };
+  return new SubstackClient(pubCfg, sid);
 }
 
 export function registerSubstackCommands(ctx: Ctx): void {
@@ -35,15 +50,17 @@ export function registerSubstackCommands(ctx: Ctx): void {
   sub
     .command("auth")
     .description("Store Substack session cookie (substack.sid) in vault")
-    .action(async () => {
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts); defaults to primary account")
+    .action(async (opts: { publication?: string }) => {
+      const { subdomain, vaultKey } = resolvePublication(cfg, opts.publication);
       const rl = readline.createInterface({ input, output });
-      console.log("Open Chrome DevTools on any Substack page:");
-      console.log("  Application → Cookies → augmentedmike.substack.com → substack.sid");
+      console.log(`Open Chrome DevTools on any Substack page:`);
+      console.log(`  Application → Cookies → ${subdomain}.substack.com → substack.sid`);
       const sid = await rl.question("Paste substack.sid value: ");
       rl.close();
       if (!sid.trim()) { console.error("Empty value, aborted."); process.exit(1); }
-      saveCookieToVault(cfg.vaultBin, sid.trim());
-      console.log("Saved to vault as 'substack-sid'.");
+      saveCookieToVault(cfg.vaultBin, sid.trim(), vaultKey);
+      console.log(`Saved to vault as '${vaultKey}'.`);
     });
 
   // ---- create-draft ----
@@ -52,8 +69,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .description("Create a new empty draft and print its ID")
     .option("-t, --title <title>", "Draft title")
     .option("-s, --subtitle <subtitle>", "Draft subtitle")
-    .action(async (opts: { title?: string; subtitle?: string }) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (opts: { title?: string; subtitle?: string; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const draft = await client.createDraft({
         draft_title: opts.title ?? "",
         draft_subtitle: opts.subtitle ?? "",
@@ -66,8 +84,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .command("list-drafts")
     .description("List draft posts")
     .option("-l, --limit <n>", "Max results", "25")
-    .action(async (opts: { limit: string }) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (opts: { limit: string; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const drafts = await client.listDrafts(parseInt(opts.limit, 10));
       if (!drafts.length) { console.log("No drafts."); return; }
       for (const d of drafts) {
@@ -80,8 +99,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
   sub
     .command("get-draft <id>")
     .description("Show draft title, subtitle, body length")
-    .action(async (id: string) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (id: string, opts: { publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const draft = await client.getDraft(id);
       console.log(`Title:    ${draft.draft_title}`);
       console.log(`Subtitle: ${draft.draft_subtitle}`);
@@ -94,8 +114,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
   sub
     .command("upload-image <file>")
     .description("Upload an image to Substack CDN and print the URL")
-    .action(async (file: string) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (file: string, opts: { publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       console.log(`Uploading ${file}...`);
       const url = await client.uploadImage(file);
       console.log(`URL: ${url}`);
@@ -106,8 +127,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .command("add-image <draftId> <imageFile>")
     .description("Upload image and insert it into a draft after a given paragraph")
     .option("-a, --after <text>", "Insert after paragraph containing this text (default: append at end)")
-    .action(async (draftId: string, imageFile: string, opts: { after?: string }) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (draftId: string, imageFile: string, opts: { after?: string; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
 
       console.log(`Uploading ${imageFile}...`);
       const url = await client.uploadImage(imageFile);
@@ -125,8 +147,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .command("set-title <draftId> <title>")
     .description("Update draft title and/or subtitle")
     .option("-s, --subtitle <text>", "Subtitle to set")
-    .action(async (draftId: string, title: string, opts: { subtitle?: string }) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (draftId: string, title: string, opts: { subtitle?: string; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const fields: Record<string, string> = { draft_title: title };
       if (opts.subtitle) fields.draft_subtitle = opts.subtitle;
       await client.updateDraft(draftId, fields as never);
@@ -137,8 +160,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
   sub
     .command("schedule <draftId> <isoDateTime>")
     .description("Schedule a post (e.g. 2026-03-09T08:00:00-06:00)")
-    .action(async (draftId: string, isoDateTime: string) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (draftId: string, isoDateTime: string, opts: { publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       await client.schedulePost(draftId, isoDateTime);
       console.log(`Scheduled post ${draftId} for ${isoDateTime}`);
     });
@@ -148,8 +172,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .command("insert-paragraph <draftId> <text>")
     .description("Insert a new paragraph into a draft. Supports **bold** inline syntax.")
     .option("-a, --after <text>", "Insert after paragraph containing this text (default: append at end)")
-    .action(async (draftId: string, text: string, opts: { after?: string }) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (draftId: string, text: string, opts: { after?: string; publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const draft = await client.getDraft(draftId);
       const newBody = client.insertParagraphIntoDraft(draft.draft_body, text, opts.after ?? null);
       await client.updateDraft(draftId, { draft_body: newBody });
@@ -160,8 +185,9 @@ export function registerSubstackCommands(ctx: Ctx): void {
   sub
     .command("patch-text <draftId> <search> <replace>")
     .description("Find and replace text in a draft body")
-    .action(async (draftId: string, search: string, replace: string) => {
-      const client = getClient(cfg);
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts)")
+    .action(async (draftId: string, search: string, replace: string, opts: { publication?: string }) => {
+      const client = getClient(cfg, opts.publication);
       const count = await client.patchBodyText(draftId, search, replace);
       if (count === 0) {
         console.log(`No matches found for: "${search}"`);
@@ -181,6 +207,7 @@ export function registerSubstackCommands(ctx: Ctx): void {
     .requiredOption("--blog-date <date>", "Original blog publish date (YYYY-MM-DD)")
     .option("--ep <ep>", "Episode label (e.g. '001')")
     .option("--schedule <isoDateTime>", "Override schedule date (default: blog-date + 7 days at 08:00 CT)")
+    .option("-p, --publication <name>", "Named publication (e.g. inner-thoughts); defaults to primary account")
     .action(async (opts: {
       title: string;
       subtitle: string;
@@ -189,8 +216,10 @@ export function registerSubstackCommands(ctx: Ctx): void {
       blogDate: string;
       ep?: string;
       schedule?: string;
+      publication?: string;
     }) => {
-      const client = getClient(cfg);
+      const { subdomain } = resolvePublication(cfg, opts.publication);
+      const client = getClient(cfg, opts.publication);
 
       // Compute schedule date: blog date + 7 days at 08:00 America/Chicago
       let scheduleDate: string;
@@ -267,7 +296,7 @@ export function registerSubstackCommands(ctx: Ctx): void {
           console.log(`  Published.`);
         } else {
           console.log(`  Saved as draft (publish endpoint declined). Review at:`);
-          console.log(`  https://${cfg.subdomain}.substack.com/publish/post/${draftId}`);
+          console.log(`  https://${subdomain}.substack.com/publish/post/${draftId}`);
         }
       } else {
         console.log(`Scheduling for ${scheduleDate}...`);
@@ -276,6 +305,6 @@ export function registerSubstackCommands(ctx: Ctx): void {
       }
 
       console.log(`\nDone. Draft ${draftId}`);
-      console.log(`Edit: https://${cfg.subdomain}.substack.com/publish/post/${draftId}`);
+      console.log(`Edit: https://${subdomain}.substack.com/publish/post/${draftId}`);
     });
 }
