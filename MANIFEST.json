@@ -139,6 +139,20 @@
         "jobsDir": "~/.miniclaw/jobs",
         "defaultJob": "software-developer"
       }
+    },
+    {
+      "id": "mc-substack",
+      "label": "Substack",
+      "description": "Substack publishing — drafts, images, scheduling, EN/ES post workflow.",
+      "path": "plugins/mc-substack",
+      "entry": "index.ts",
+      "cli": true,
+      "tools": [],
+      "optional": true,
+      "config": {
+        "subdomain": "",
+        "vaultBin": "~/.local/bin/mc-vault"
+      }
     }
   ],
 

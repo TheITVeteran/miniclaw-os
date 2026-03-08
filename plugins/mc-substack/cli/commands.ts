@@ -1,0 +1,281 @@
+import * as readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+import type { Command } from "commander";
+import type { Logger } from "openclaw/plugin-sdk";
+import type { SubstackConfig } from "../src/config.js";
+import { SubstackClient } from "../src/client.js";
+import { readCookieFromVault, saveCookieToVault } from "../src/vault.js";
+
+interface Ctx {
+  program: Command;
+  cfg: SubstackConfig;
+  logger: Logger;
+}
+
+function getClient(cfg: SubstackConfig): SubstackClient {
+  const raw = readCookieFromVault(cfg.vaultBin);
+  if (!raw) {
+    console.error("No Substack session cookie stored. Run: mc mc-substack auth");
+    process.exit(1);
+  }
+  // vault `get` returns "key = value" — extract value and URL-decode
+  const value = raw.includes(" = ") ? raw.split(" = ").slice(1).join(" = ").trim() : raw;
+  const sid = decodeURIComponent(value);
+  return new SubstackClient(cfg, sid);
+}
+
+export function registerSubstackCommands(ctx: Ctx): void {
+  const { program, cfg } = ctx;
+
+  const sub = program
+    .command("mc-substack")
+    .description("Substack publishing — drafts, images, scheduling");
+
+  // ---- auth ----
+  sub
+    .command("auth")
+    .description("Store Substack session cookie (substack.sid) in vault")
+    .action(async () => {
+      const rl = readline.createInterface({ input, output });
+      console.log("Open Chrome DevTools on any Substack page:");
+      console.log("  Application → Cookies → augmentedmike.substack.com → substack.sid");
+      const sid = await rl.question("Paste substack.sid value: ");
+      rl.close();
+      if (!sid.trim()) { console.error("Empty value, aborted."); process.exit(1); }
+      saveCookieToVault(cfg.vaultBin, sid.trim());
+      console.log("Saved to vault as 'substack-sid'.");
+    });
+
+  // ---- create-draft ----
+  sub
+    .command("create-draft")
+    .description("Create a new empty draft and print its ID")
+    .option("-t, --title <title>", "Draft title")
+    .option("-s, --subtitle <subtitle>", "Draft subtitle")
+    .action(async (opts: { title?: string; subtitle?: string }) => {
+      const client = getClient(cfg);
+      const draft = await client.createDraft({
+        draft_title: opts.title ?? "",
+        draft_subtitle: opts.subtitle ?? "",
+      });
+      console.log(`Created draft: ${draft.id}`);
+    });
+
+  // ---- list-drafts ----
+  sub
+    .command("list-drafts")
+    .description("List draft posts")
+    .option("-l, --limit <n>", "Max results", "25")
+    .action(async (opts: { limit: string }) => {
+      const client = getClient(cfg);
+      const drafts = await client.listDrafts(parseInt(opts.limit, 10));
+      if (!drafts.length) { console.log("No drafts."); return; }
+      for (const d of drafts) {
+        const status = d.is_published ? "published" : "draft";
+        console.log(`  ${d.id}  [${status}]  ${d.draft_title || d.slug || "(untitled)"}`);
+      }
+    });
+
+  // ---- get-draft ----
+  sub
+    .command("get-draft <id>")
+    .description("Show draft title, subtitle, body length")
+    .action(async (id: string) => {
+      const client = getClient(cfg);
+      const draft = await client.getDraft(id);
+      console.log(`Title:    ${draft.draft_title}`);
+      console.log(`Subtitle: ${draft.draft_subtitle}`);
+      console.log(`Body len: ${draft.draft_body?.length ?? 0} chars`);
+      console.log(`Published: ${draft.is_published}`);
+      console.log(`Post date: ${draft.post_date}`);
+    });
+
+  // ---- upload-image ----
+  sub
+    .command("upload-image <file>")
+    .description("Upload an image to Substack CDN and print the URL")
+    .action(async (file: string) => {
+      const client = getClient(cfg);
+      console.log(`Uploading ${file}...`);
+      const url = await client.uploadImage(file);
+      console.log(`URL: ${url}`);
+    });
+
+  // ---- add-image ----
+  sub
+    .command("add-image <draftId> <imageFile>")
+    .description("Upload image and insert it into a draft after a given paragraph")
+    .option("-a, --after <text>", "Insert after paragraph containing this text (default: append at end)")
+    .action(async (draftId: string, imageFile: string, opts: { after?: string }) => {
+      const client = getClient(cfg);
+
+      console.log(`Uploading ${imageFile}...`);
+      const url = await client.uploadImage(imageFile);
+      console.log(`  CDN URL: ${url}`);
+
+      console.log(`Patching draft ${draftId}...`);
+      const draft = await client.getDraft(draftId);
+      const newBody = client.insertImageIntoDraft(draft.draft_body, url, opts.after ?? null);
+      await client.updateDraft(draftId, { draft_body: newBody });
+      console.log(`  Done.`);
+    });
+
+  // ---- set-title ----
+  sub
+    .command("set-title <draftId> <title>")
+    .description("Update draft title and/or subtitle")
+    .option("-s, --subtitle <text>", "Subtitle to set")
+    .action(async (draftId: string, title: string, opts: { subtitle?: string }) => {
+      const client = getClient(cfg);
+      const fields: Record<string, string> = { draft_title: title };
+      if (opts.subtitle) fields.draft_subtitle = opts.subtitle;
+      await client.updateDraft(draftId, fields as never);
+      console.log("Updated.");
+    });
+
+  // ---- schedule ----
+  sub
+    .command("schedule <draftId> <isoDateTime>")
+    .description("Schedule a post (e.g. 2026-03-09T08:00:00-06:00)")
+    .action(async (draftId: string, isoDateTime: string) => {
+      const client = getClient(cfg);
+      await client.schedulePost(draftId, isoDateTime);
+      console.log(`Scheduled post ${draftId} for ${isoDateTime}`);
+    });
+
+  // ---- insert-paragraph ----
+  sub
+    .command("insert-paragraph <draftId> <text>")
+    .description("Insert a new paragraph into a draft. Supports **bold** inline syntax.")
+    .option("-a, --after <text>", "Insert after paragraph containing this text (default: append at end)")
+    .action(async (draftId: string, text: string, opts: { after?: string }) => {
+      const client = getClient(cfg);
+      const draft = await client.getDraft(draftId);
+      const newBody = client.insertParagraphIntoDraft(draft.draft_body, text, opts.after ?? null);
+      await client.updateDraft(draftId, { draft_body: newBody });
+      console.log(`Inserted paragraph into draft ${draftId}.`);
+    });
+
+  // ---- patch-text ----
+  sub
+    .command("patch-text <draftId> <search> <replace>")
+    .description("Find and replace text in a draft body")
+    .action(async (draftId: string, search: string, replace: string) => {
+      const client = getClient(cfg);
+      const count = await client.patchBodyText(draftId, search, replace);
+      if (count === 0) {
+        console.log(`No matches found for: "${search}"`);
+      } else {
+        console.log(`Replaced ${count} occurrence(s) of "${search}" → "${replace}"`);
+      }
+    });
+
+  // ---- post-comic ----
+  sub
+    .command("post-comic")
+    .description("Create, populate, and schedule a comic cross-post (full workflow)")
+    .requiredOption("--title <title>", "Post title (e.g. 'EP.001 — The Night My Eyes Changed Color')")
+    .requiredOption("--subtitle <subtitle>", "Post subtitle")
+    .requiredOption("--image <url>", "Image URL (hosted on blog CDN)")
+    .requiredOption("--blog-url <url>", "Canonical blog URL")
+    .requiredOption("--blog-date <date>", "Original blog publish date (YYYY-MM-DD)")
+    .option("--ep <ep>", "Episode label (e.g. '001')")
+    .option("--schedule <isoDateTime>", "Override schedule date (default: blog-date + 7 days at 08:00 CT)")
+    .action(async (opts: {
+      title: string;
+      subtitle: string;
+      image: string;   // hosted URL
+      blogUrl: string;
+      blogDate: string;
+      ep?: string;
+      schedule?: string;
+    }) => {
+      const client = getClient(cfg);
+
+      // Compute schedule date: blog date + 7 days at 08:00 America/Chicago
+      let scheduleDate: string;
+      if (opts.schedule) {
+        scheduleDate = opts.schedule;
+      } else {
+        const [y, m, d] = opts.blogDate.split("-").map(Number);
+        const base = new Date(Date.UTC(y, m - 1, d + 7, 14, 0, 0)); // 08:00 CT = 14:00 UTC
+        scheduleDate = base.toISOString();
+      }
+
+      // 1. Create draft
+      console.log("Creating draft...");
+      const draft = await client.createDraft({
+        draft_title: opts.title,
+        draft_subtitle: opts.subtitle,
+      });
+      const draftId = draft.id;
+      console.log(`  Draft ID: ${draftId}`);
+
+      // 2. Use hosted image URL directly
+      const imageUrl = opts.image;
+      console.log(`Using image URL: ${imageUrl}`);
+
+      // 3. Build body: intro → image → closing
+      const epLabel = opts.ep ? `EP.${opts.ep.padStart(3, "0")}` : "";
+      const epStr = epLabel ? `${epLabel} — ` : "";
+      const introText = `${epStr}Originally published on AugmentedMike's blog on ${opts.blogDate}.`;
+      const closingText = `Read the full story, behind-the-scenes addendum, and Spanish translation → `;
+
+      // Start from blank doc
+      let body = JSON.stringify({ type: "doc", content: [{ type: "paragraph", attrs: { textAlign: null } }] });
+
+      // Insert intro paragraph (replace the blank one)
+      body = client.insertParagraphIntoDraft(body, introText, null);
+
+      // Insert image after intro
+      body = client.insertImageIntoDraft(body, imageUrl, introText);
+
+      // Insert closing paragraph with link after image
+      const closingDoc = JSON.parse(body);
+      closingDoc.content.push({
+        type: "paragraph",
+        attrs: { textAlign: null },
+        content: [
+          { type: "text", text: closingText },
+          {
+            type: "text",
+            marks: [{ type: "link", attrs: { href: opts.blogUrl, target: "_blank", rel: "noopener noreferrer nofollow", class: null } }],
+            text: "blog.augmentedmike.com",
+          },
+        ],
+      });
+      body = JSON.stringify(closingDoc);
+
+      // Remove the initial blank paragraph
+      const finalDoc = JSON.parse(body);
+      finalDoc.content = finalDoc.content.filter((n: { type: string; content?: unknown[] }) =>
+        !(n.type === "paragraph" && (!n.content || n.content.length === 0))
+      );
+      body = JSON.stringify(finalDoc);
+
+      // 4. Update draft with full body
+      console.log("Updating draft body...");
+      await client.updateDraft(draftId, { draft_body: body });
+
+      // 5. Schedule or publish
+      const isInPast = new Date(scheduleDate) <= new Date();
+      if (isInPast) {
+        // Backfill: try to publish immediately (Substack may allow backdated posts)
+        console.log(`Date ${scheduleDate} is in the past — publishing immediately...`);
+        const ok = await client.publishDraft(draftId, { send: false });
+        if (ok) {
+          console.log(`  Published.`);
+        } else {
+          console.log(`  Saved as draft (publish endpoint declined). Review at:`);
+          console.log(`  https://${cfg.subdomain}.substack.com/publish/post/${draftId}`);
+        }
+      } else {
+        console.log(`Scheduling for ${scheduleDate}...`);
+        await client.schedulePost(draftId, scheduleDate);
+        console.log(`  Scheduled.`);
+      }
+
+      console.log(`\nDone. Draft ${draftId}`);
+      console.log(`Edit: https://${cfg.subdomain}.substack.com/publish/post/${draftId}`);
+    });
+}

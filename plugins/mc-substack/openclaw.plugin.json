@@ -1,0 +1,14 @@
+{
+  "id": "mc-substack",
+  "name": "Miniclaw Substack",
+  "description": "Substack publishing — drafts, images, scheduling, EN/ES post workflow.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "subdomain": { "type": "string" },
+      "vaultBin":  { "type": "string" }
+    },
+    "required": ["subdomain"]
+  }
+}
