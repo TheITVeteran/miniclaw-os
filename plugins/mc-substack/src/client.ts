@@ -69,12 +69,25 @@ export class SubstackClient {
   }
 
   async schedulePost(id: number | string, isoDateTime: string): Promise<void> {
-    const resp = await fetch(`${this.base}/api/v1/drafts/${id}`, {
+    // Publish first, then set post_date for future scheduling
+    const pubResp = await fetch(`${this.base}/api/v1/drafts/${id}/publish`, {
+      method: "POST",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ send: false, share_automatically: false }),
+    });
+    if (!pubResp.ok) {
+      const text = await pubResp.text();
+      throw new Error(`Publish draft ${id} failed ${pubResp.status}: ${text.substring(0, 300)}`);
+    }
+    const dateResp = await fetch(`${this.base}/api/v1/drafts/${id}`, {
       method: "PUT",
       headers: this.headers({ "Content-Type": "application/json" }),
       body: JSON.stringify({ post_date: isoDateTime }),
     });
-    if (!resp.ok) throw new Error(`Schedule post ${id} failed: ${resp.status}`);
+    if (!dateResp.ok) {
+      const text = await dateResp.text();
+      throw new Error(`Set post_date ${id} failed ${dateResp.status}: ${text.substring(0, 300)}`);
+    }
   }
 
   async publishDraft(id: number | string, options: { send?: boolean; shareAutomatically?: boolean } = {}): Promise<boolean> {
