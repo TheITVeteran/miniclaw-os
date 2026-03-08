@@ -128,6 +128,20 @@
       }
     },
     {
+      "id": "mc-email",
+      "label": "Email",
+      "description": "Autonomous Gmail triage — IMAP inbox polling, Haiku classification (6 categories), reply-as-AM, archive, and escalation to michael@claimhawk.app.",
+      "path": "plugins/mc-email",
+      "entry": "index.ts",
+      "cli": true,
+      "tools": [],
+      "requires": ["gmail-app-password"],
+      "config": {
+        "vaultBin": "~/.local/bin/mc-vault",
+        "emailAddress": "augmentedmike@gmail.com"
+      }
+    },
+    {
       "id": "mc-jobs",
       "label": "Jobs",
       "description": "Role-specific job templates with workflows, procedures, and review gates for agents.",
