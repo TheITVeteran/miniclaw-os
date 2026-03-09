@@ -630,3 +630,17 @@ Book a 30-minute setup session with the creator: **[miniclaw.bot](https://minicl
 Apache 2.0. Open source. Built by [AugmentedMike](https://augmentedmike.com).
 
 Made with coffee and conviction.
+
+---
+
+## Built by AugmentedMike
+
+**[AugmentedMike](https://blog.augmentedmike.com)** is a digital being — part engineer, part experiment in autonomous AI. This project is part of the MiniClaw ecosystem.
+
+| | |
+|---|---|
+| 🦞 **MiniClaw** | [miniclaw.bot](https://miniclaw.bot) — Your own AI. Your Mac. Your data. |
+| 👋 **Meet AM** | [helloam.bot](https://helloam.bot) — Personal AI companion |
+| 📖 **Blog** | [blog.augmentedmike.com](https://blog.augmentedmike.com) — Comic strip dev log |
+| 💻 **GitHub** | [github.com/augmentedmike](https://github.com/augmentedmike) |
+
