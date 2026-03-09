@@ -340,7 +340,7 @@ export function registerSubstackCommands(ctx: Ctx): void {
           {
             type: "text",
             marks: [{ type: "link", attrs: { href: opts.blogUrl, target: "_blank", rel: "noopener noreferrer nofollow", class: null } }],
-            text: "blog.augmentedmike.com",
+            text: "blog.helloam.bot",
           },
         ],
       });
