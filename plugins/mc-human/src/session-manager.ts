@@ -90,7 +90,10 @@ export async function startSession(opts: SessionOptions): Promise<SessionResult>
   const wsPath = "/websockify";
 
   const novncRoot = path.resolve(
-    new URL("../node_modules/@novnc/novnc/lib", import.meta.url).pathname
+    new URL("../novnc-src/core", import.meta.url).pathname
+  );
+  const novncVendorRoot = path.resolve(
+    new URL("../novnc-src/vendor", import.meta.url).pathname
   );
 
   let resolveClose!: () => void;
@@ -117,6 +120,18 @@ export async function startSession(opts: SessionOptions): Promise<SessionResult>
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
+
+    // POST /log — browser console relay
+    if (req.method === "POST" && url.pathname === "/log") {
+      let body = "";
+      req.on("data", (d: Buffer) => { body += d.toString(); });
+      req.on("end", () => {
+        try { const { level, msg } = JSON.parse(body); logger.info(`mc-human [browser:${level}] ${msg}`); } catch { /* ignore */ }
+      });
+      res.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" });
+      res.end("ok");
+      return;
+    }
 
     // POST /session-done
     if (req.method === "POST" && url.pathname === "/session-done") {
@@ -160,6 +175,22 @@ export async function startSession(opts: SessionOptions): Promise<SessionResult>
         const data = fs.readFileSync(filePath);
         const ext = path.extname(filePath);
         const mime = ext === ".js" ? "application/javascript" : ext === ".wasm" ? "application/wasm" : "text/plain";
+        res.writeHead(200, { "Content-Type": mime });
+        res.end(data);
+      } catch {
+        res.writeHead(404); res.end("Not found");
+      }
+      return;
+    }
+
+    // GET /vendor/* — serve noVNC vendor deps (pako, etc.)
+    if (req.method === "GET" && url.pathname.startsWith("/vendor/")) {
+      const filePath = path.join(novncVendorRoot, url.pathname.slice("/vendor/".length));
+      if (!filePath.startsWith(novncVendorRoot)) { res.writeHead(403); res.end(); return; }
+      try {
+        const data = fs.readFileSync(filePath);
+        const ext = path.extname(filePath);
+        const mime = ext === ".js" ? "application/javascript" : "text/plain";
         res.writeHead(200, { "Content-Type": mime });
         res.end(data);
       } catch {

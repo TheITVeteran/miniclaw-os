@@ -188,6 +188,7 @@ export function attachVncProxy(
 ): void {
   server.on("upgrade", (req, socket, _head) => {
     const reqUrl = new URL(req.url ?? "/", "http://localhost");
+    logger.info(`mc-human: WS upgrade path=${reqUrl.pathname}`);
     if (reqUrl.pathname !== wsPath) {
       socket.destroy();
       return;
@@ -195,6 +196,7 @@ export function attachVncProxy(
 
     const token = reqUrl.searchParams.get("token") ?? "";
     const vnc = lookupVnc(token);
+    logger.info(`mc-human: WS token lookup result=${JSON.stringify(vnc)}`);
     if (!vnc) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
@@ -202,10 +204,15 @@ export function attachVncProxy(
     }
 
     const key = parseWebSocketKey(req);
+    logger.info(`mc-human: WS key=${key ? key.slice(0, 8) + '...' : 'NULL'} protocol=${req.headers["sec-websocket-protocol"] ?? "none"}`);
     if (!key) {
       socket.destroy();
       return;
     }
+
+    // Only echo back Sec-WebSocket-Protocol if the client requested one
+    const requestedProtocol = req.headers["sec-websocket-protocol"] as string | undefined;
+    const protocolHeader = requestedProtocol ? `Sec-WebSocket-Protocol: ${requestedProtocol.split(",")[0].trim()}\r\n` : "";
 
     // Complete WebSocket handshake
     socket.write(
@@ -213,7 +220,7 @@ export function attachVncProxy(
       "Upgrade: websocket\r\n" +
       "Connection: Upgrade\r\n" +
       `Sec-WebSocket-Accept: ${wsAccept(key)}\r\n` +
-      "Sec-WebSocket-Protocol: binary\r\n" +
+      protocolHeader +
       "\r\n"
     );
 

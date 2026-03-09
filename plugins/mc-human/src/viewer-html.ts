@@ -53,42 +53,86 @@ export function buildViewerHtml(opts: {
 </div>
 <button id="close-btn" onclick="closeSession()">Done — Resume AM</button>
 
+<script>
+function log(level, msg) {
+  fetch('/log', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({level, msg: String(msg)}) }).catch(()=>{});
+}
+window.addEventListener('error', (e) => {
+  log('error', 'global-error: ' + e.message + ' ' + e.filename + ':' + e.lineno);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('error', 'unhandled-rejection: ' + String(e.reason));
+});
+log('info', 'page loaded');
+</script>
 <script type="module">
-import RFB from '/novnc/rfb.js';
-
 const status = document.getElementById('status');
 const overlay = document.getElementById('overlay');
 const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
 const wsUrl = wsProto + '://' + location.host + '${wsPath}?token=${token}';
 const vncPassword = ${vncPassword ? JSON.stringify(vncPassword) : 'null'};
 
+function log(level, msg) {
+  fetch('/log', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({level, msg: String(msg)}) }).catch(()=>{});
+}
+
+log('info', 'module script started');
+
+let RFB;
+try {
+  const mod = await import('/novnc/rfb.js');
+  RFB = mod.default;
+  log('info', 'rfb.js imported OK, RFB=' + typeof RFB);
+} catch(importErr) {
+  log('error', 'import failed: ' + importErr.message + ' ' + importErr.stack);
+  document.getElementById('status').textContent = 'Error';
+  document.getElementById('status').className = 'error';
+  document.getElementById('overlay').innerHTML = '<p>Failed to load noVNC: ' + importErr.message + '</p>';
+}
+
+if (!RFB) { /* stop here */ }
+else {
+
+log('info', 'creating RFB wsUrl=' + wsUrl + ' hasPassword=' + !!vncPassword);
 let rfb;
 try {
-  rfb = new RFB(document.getElementById('screen'), wsUrl, {
-    credentials: vncPassword ? { password: vncPassword } : {},
+  rfb = new RFB(document.getElementById('screen'), wsUrl);
+
+  rfb.addEventListener('credentialsrequired', () => {
+    log('info', 'credentialsrequired fired, sending password=' + !!vncPassword);
+    if (vncPassword) {
+      rfb.sendCredentials({ password: vncPassword });
+    } else {
+      const pw = prompt('VNC password:') ?? '';
+      rfb.sendCredentials({ password: pw });
+    }
   });
 
   rfb.addEventListener('connect', () => {
-    overlay.style.display = 'none';
+    log('info', 'connected!');
+    overlay.remove();
     status.textContent = 'Connected';
     status.className = 'connected';
     rfb.scaleViewport = true;
     rfb.resizeSession = true;
+    rfb.viewOnly = false;
+    rfb.showDotCursor = true;
+    rfb.focus();
   });
 
   rfb.addEventListener('disconnect', (e) => {
+    log('warn', 'disconnect clean=' + e.detail.clean + ' reason=' + JSON.stringify(e.detail));
     status.textContent = e.detail.clean ? 'Disconnected' : 'Lost connection';
     status.className = 'error';
     overlay.innerHTML = '<p>' + (e.detail.clean ? 'Session ended.' : 'Connection lost. You can close this tab.') + '</p>';
     overlay.style.display = 'flex';
   });
 
-  rfb.addEventListener('credentialsrequired', () => {
-    // Fallback if auto-auth fails
-    const pw = prompt('VNC password:') ?? '';
-    rfb.sendCredentials({ password: pw });
+  rfb.addEventListener('securityfailure', (e) => {
+    log('error', 'securityfailure status=' + e.detail.status + ' reason=' + e.detail.reason);
   });
 } catch(err) {
+  log('error', 'RFB init failed: ' + err.message + ' ' + err.stack);
   status.textContent = 'Error';
   status.className = 'error';
   overlay.innerHTML = '<p>Failed to load VNC client: ' + err.message + '</p>';
@@ -101,10 +145,10 @@ window.closeSession = function() {
   });
 };
 
-// Auto-signal done when tab closes
 window.addEventListener('beforeunload', () => {
   navigator.sendBeacon('/session-done?token=${token}');
 });
+} // end else RFB
 </script>
 </body>
 </html>`;
